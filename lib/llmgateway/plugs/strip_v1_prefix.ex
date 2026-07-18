@@ -1,6 +1,6 @@
 defmodule Llmgateway.Plugs.StripV1Prefix do
   @moduledoc """
-  Strips the `/v1` prefix from request paths so that both
+  Strips the `/v1` and `/v2` prefix from request paths so that both
   `/v1/models` and `/models` match the same route in Plug.Router.
   """
   @behaviour Plug
@@ -10,6 +10,7 @@ defmodule Llmgateway.Plugs.StripV1Prefix do
   def call(conn, _opts) do
     case conn.path_info do
       ["v1" | rest] -> %{conn | path_info: rest}
+      ["v2" | rest] -> %{conn | path_info: rest}
       _ -> conn
     end
   end
