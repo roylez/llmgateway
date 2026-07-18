@@ -74,7 +74,12 @@ defmodule Llmgateway.Auth.GitHubDevice do
         Path.join([System.user_home!(), ".config", "llmgateway"])
 
     token_dir = Path.join(base_dir, "github_copilot")
-    File.mkdir_p!(token_dir)
+
+    case File.mkdir_p(token_dir) do
+      :ok -> :ok
+      {:error, reason} ->
+        Logger.warning("[#{provider_name}] Cannot create token dir #{token_dir}: #{reason}. Token caching disabled.")
+    end
 
     state = %__MODULE__{
       provider_name: provider_name,
@@ -314,8 +319,11 @@ defmodule Llmgateway.Auth.GitHubDevice do
 
   defp save_access_token(state) do
     path = Path.join(state.token_dir, "access-token")
-    File.write(path, state.access_token || "")
-    File.chmod(path, 0o600)
+
+    case File.write(path, state.access_token || "") do
+      :ok -> File.chmod(path, 0o600)
+      {:error, reason} -> Logger.warning("[#{state.provider_name}] Cannot save access token: #{reason}")
+    end
   end
 
   defp save_api_key(state) do
@@ -327,7 +335,9 @@ defmodule Llmgateway.Auth.GitHubDevice do
         "expires_at" => state.api_key_expires_at
       })
 
-    File.write(path, data)
-    File.chmod(path, 0o600)
+    case File.write(path, data) do
+      :ok -> File.chmod(path, 0o600)
+      {:error, reason} -> Logger.warning("[#{state.provider_name}] Cannot save API key: #{reason}")
+    end
   end
 end

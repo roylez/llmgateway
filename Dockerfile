@@ -22,6 +22,9 @@ RUN mix release
 
 FROM alpine:${alpine_version}
 
+ARG PUID=1000
+ARG PGID=1000
+
 ENV LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 LANGUAGE=en_US.UTF-8
 
 RUN apk update --no-cache && \
@@ -29,7 +32,8 @@ RUN apk update --no-cache && \
 
 WORKDIR /app
 
-RUN addgroup -S llmgateway && adduser -S llmgateway -G llmgateway -h /app
+RUN addgroup -g ${PGID} -S llmgateway && \
+    adduser -u ${PUID} -S llmgateway -G llmgateway -h /app
 RUN mkdir -p /config && chown llmgateway:llmgateway /config
 
 USER llmgateway

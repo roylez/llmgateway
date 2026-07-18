@@ -7,7 +7,12 @@ defmodule Llmgateway.ServerAnthropicTest do
   @fixtures_path "test/fixtures"
 
   setup do
-    if Process.whereis(Router), do: GenServer.stop(Router)
+    try do
+      if Process.whereis(Router), do: GenServer.stop(Router)
+    catch
+      :exit, _ -> :ok
+    end
+
     {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
     {:ok, _pid} = Router.start_link(config)
     :ok

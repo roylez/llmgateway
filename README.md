@@ -266,10 +266,20 @@ OPENROUTER_API_KEY=sk-or-...
 ANTHROPIC_API_KEY=sk-ant-...
 LLMGATEWAY_DEV_KEY=my-dev-key
 ```
-  llmgateway
+
+### File permissions
+
+The container runs as UID/GID 1000 by default. If your `config/` directory has different ownership, set `PUID`/`PGID` to match:
+
+```bash
+# docker-compose — set in .env or shell
+PUID=$(id -u) PGID=$(id -g) docker compose up -d
+
+# docker build
+docker build --build-arg PUID=$(id -u) --build-arg PGID=$(id -g) -t llmgateway .
 ```
 
-The container uses `/config` for both configuration and persistent data — matching the convention of many Docker applications. One mount holds everything:
+The container uses `/config` for both configuration and persistent data. One mount holds everything:
 
 ```
 config/
