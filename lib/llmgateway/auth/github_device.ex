@@ -46,7 +46,8 @@ defmodule Llmgateway.Auth.GitHubDevice do
     :api_base,           # dynamic base URL from token exchange
     :model_endpoints,    # %{"gpt-5.5" => ["/responses"], ...}
     :token_dir,
-    :status
+    :status,
+    :refresh_timer       # timer ref for proactive refresh
   ]
 
   # ── Client API ────────────────────────────────────────────
@@ -113,7 +114,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
     case get_valid_api_key(state) do
       {:ok, _key, state} ->
         Logger.info("[#{state.provider_name}] Using cached Copilot token")
-        state = if state.model_endpoints, do: state, else: fetch_model_endpoints(state)
+        state = if state.model_endpoints, do: schedule_refresh(state), else: fetch_model_endpoints(state) |> schedule_refresh()
         {:noreply, state}
 
       {:needs_refresh, state} ->
@@ -142,7 +143,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
   def handle_call(:get_token, _from, state) do
     case get_valid_api_key(state) do
       {:ok, api_key, new_state} ->
-        {:reply, {:ok, api_key}, new_state}
+        {:reply, {:ok, api_key}, schedule_refresh(new_state)}
 
       {:needs_refresh, new_state} ->
         case refresh_api_key(new_state) do
@@ -180,7 +181,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
 
   @impl true
   def handle_call(:list_known_models, _from, state) do
-    known = state.model_endpoints |> Map.keys() |> Enum.sort()
+    known = (state.model_endpoints || %{}) |> Map.keys() |> Enum.sort()
     {:reply, known, state}
   end
 
@@ -208,6 +209,43 @@ defmodule Llmgateway.Auth.GitHubDevice do
   end
 
   # ── Token state checks ───────────────────────────────────
+
+  defp schedule_refresh(state) when is_integer(state.api_key_expires_at) do
+    # Cancel any existing timer
+    if state.refresh_timer, do: Process.cancel_timer(state.refresh_timer)
+
+    now = :os.system_time(:second)
+    delay = max(0, state.api_key_expires_at - now)
+
+    timer = Process.send_after(self(), :refresh_api_key, delay * 1_000)
+    %{state | refresh_timer: timer}
+  end
+
+  defp schedule_refresh(state), do: state
+
+  @impl true
+  def handle_info(:refresh_api_key, state) do
+    Logger.info("[#{state.provider_name}] Proactive API key refresh...")
+    state = %{state | refresh_timer: nil}
+
+    case get_valid_api_key(state) do
+      {:needs_refresh, state} ->
+        case refresh_api_key(state) do
+          {:ok, _key, refreshed} ->
+            {:noreply, refreshed}
+          {:error, _reason} ->
+            Logger.warning("[#{state.provider_name}] Proactive refresh failed, will retry on next request")
+            {:noreply, state}
+        end
+
+      {:ok, _key, state} ->
+        # Still valid — reschedule
+        {:noreply, schedule_refresh(state)}
+
+      {:needs_login, _state} ->
+        {:noreply, state}
+    end
+  end
 
   defp get_valid_api_key(%{api_key: key, api_key_expires_at: exp} = state)
        when is_binary(key) and is_integer(exp) do
@@ -342,6 +380,9 @@ defmodule Llmgateway.Auth.GitHubDevice do
         }
 
         save_api_key(new_state)
+
+        # Schedule proactive refresh before expiry
+        new_state = schedule_refresh(new_state)
 
         # Fetch model endpoints in background
         new_state = fetch_model_endpoints(new_state)

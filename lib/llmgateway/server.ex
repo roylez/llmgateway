@@ -67,6 +67,19 @@ defmodule Llmgateway.Server do
     end
   end
 
+  # Non-v1 paths for compatibility with clients that don't use /v1/
+  post "/chat/completions" do
+    body = conn.body_params
+    model_name = body["model"]
+    key_name = conn.assigns[:key_name]
+
+    if body["stream"] do
+      handle_stream(conn, model_name, body, key_name)
+    else
+      handle_completion(conn, model_name, body, key_name)
+    end
+  end
+
   post "/v1/chat/completions" do
     body = conn.body_params
     model_name = body["model"]
@@ -77,6 +90,20 @@ defmodule Llmgateway.Server do
       handle_stream(conn, model_name, body, key_name)
     else
       handle_completion(conn, model_name, body, key_name)
+    end
+  end
+
+  post "/messages" do
+    body = conn.body_params
+    model_name = body["model"]
+    key_name = conn.assigns[:key_name]
+
+    canonical_body = Llmgateway.Convert.InboundAnthropic.to_canonical(body)
+
+    if body["stream"] do
+      handle_anthropic_stream(conn, model_name, canonical_body, key_name)
+    else
+      handle_anthropic_completion(conn, model_name, canonical_body, key_name)
     end
   end
 
