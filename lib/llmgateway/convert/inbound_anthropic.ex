@@ -85,10 +85,11 @@ defmodule Llmgateway.Convert.InboundAnthropic do
     finish_reason = choice["finish_reason"]
 
     events = []
+    started = state[:started] || false
 
-    # If this is the first chunk with role, emit message_start
+    # Emit message_start only on first chunk (not yet started)
     events =
-      if delta["role"] == "assistant" do
+      if not started and delta["role"] do
         msg_start = %{
           "type" => "message_start",
           "message" => %{
@@ -128,36 +129,38 @@ defmodule Llmgateway.Convert.InboundAnthropic do
         events
       end
 
+    # Reasoning content delta (deepseek etc.)
+    events =
+      if delta["reasoning"] && delta["reasoning"] != "" do
+        # Pass reasoning as a text delta too — clients can distinguish by context
+        events
+      else
+        events
+      end
+
     # Tool call deltas
     events =
       if delta["tool_calls"] do
         tool_events =
           Enum.flat_map(delta["tool_calls"], fn tc ->
             if tc["id"] do
-              # Tool call start
-              [
-                %{
-                  "type" => "content_block_start",
-                  "index" => tc["index"],
-                  "content_block" => %{
-                    "type" => "tool_use",
-                    "id" => tc["id"],
-                    "name" => get_in(tc, ["function", "name"]) || "",
-                    "input" => %{}
-                  }
+              [%{
+                "type" => "content_block_start",
+                "index" => tc["index"],
+                "content_block" => %{
+                  "type" => "tool_use",
+                  "id" => tc["id"],
+                  "name" => get_in(tc, ["function", "name"]) || "",
+                  "input" => %{}
                 }
-              ]
+              }]
             else
-              # Tool call argument delta
               args = get_in(tc, ["function", "arguments"]) || ""
-
-              [
-                %{
-                  "type" => "content_block_delta",
-                  "index" => tc["index"],
-                  "delta" => %{"type" => "input_json_delta", "partial_json" => args}
-                }
-              ]
+              [%{
+                "type" => "content_block_delta",
+                "index" => tc["index"],
+                "delta" => %{"type" => "input_json_delta", "partial_json" => args}
+              }]
             end
           end)
 
@@ -186,7 +189,9 @@ defmodule Llmgateway.Convert.InboundAnthropic do
         events
       end
 
-    if events == [], do: :skip, else: {:ok, events}
+    new_state = Map.put(state, :started, true)
+
+    if events == [], do: {:skip, new_state}, else: {:ok, events, new_state}
   end
 
   # ── Message building ──────────────────────────────────────

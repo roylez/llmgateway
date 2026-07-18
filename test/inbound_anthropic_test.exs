@@ -249,7 +249,7 @@ defmodule Llmgateway.InboundAnthropicTest do
         "choices" => [%{"delta" => %{"role" => "assistant", "content" => ""}, "finish_reason" => nil}]
       }
 
-      assert {:ok, events} = InboundAnthropic.chunk_to_anthropic_events(chunk)
+      assert {:ok, events, _state} = InboundAnthropic.chunk_to_anthropic_events(chunk)
       types = Enum.map(events, & &1["type"])
       assert "message_start" in types
       assert "content_block_start" in types
@@ -260,7 +260,7 @@ defmodule Llmgateway.InboundAnthropicTest do
         "choices" => [%{"delta" => %{"content" => "Hello"}, "finish_reason" => nil}]
       }
 
-      assert {:ok, [event]} = InboundAnthropic.chunk_to_anthropic_events(chunk)
+      assert {:ok, [event], _state} = InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
       assert event["type"] == "content_block_delta"
       assert event["delta"]["text"] == "Hello"
     end
@@ -271,7 +271,7 @@ defmodule Llmgateway.InboundAnthropicTest do
         "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 5}
       }
 
-      assert {:ok, events} = InboundAnthropic.chunk_to_anthropic_events(chunk)
+      assert {:ok, events, _state} = InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
       types = Enum.map(events, & &1["type"])
       assert "content_block_stop" in types
       assert "message_delta" in types
@@ -283,7 +283,7 @@ defmodule Llmgateway.InboundAnthropicTest do
         "choices" => [%{"delta" => %{}, "finish_reason" => nil}]
       }
 
-      assert :skip = InboundAnthropic.chunk_to_anthropic_events(chunk)
+      assert {:skip, _state} = InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
     end
   end
 end

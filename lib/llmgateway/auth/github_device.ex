@@ -141,29 +141,6 @@ defmodule Llmgateway.Auth.GitHubDevice do
   end
 
   @impl true
-  def handle_cast({:device_flow_result, {:ok, access_token}, from}, state) do
-    Logger.info("[#{state.provider_name}] Device flow successful")
-
-    state = %{state | access_token: access_token, status: :authenticated}
-    save_access_token(state)
-
-    case refresh_api_key(state) do
-      {:ok, api_key, new_state} ->
-        GenServer.reply(from, {:ok, api_key})
-        {:noreply, new_state}
-
-      {:error, reason} ->
-        GenServer.reply(from, {:error, reason})
-        {:noreply, state}
-    end
-  end
-
-  def handle_cast({:device_flow_result, {:error, reason}, from}, state) do
-    Logger.warning("[#{state.provider_name}] Device flow failed: #{inspect(reason)}")
-    GenServer.reply(from, {:error, reason})
-    {:noreply, %{state | status: :idle}}
-  end
-  @impl true
   def handle_cast({:device_flow_result_eager, {:ok, access_token}}, state) do
     Logger.info("[#{state.provider_name}] Device flow successful")
 
@@ -207,23 +184,6 @@ defmodule Llmgateway.Auth.GitHubDevice do
 
   # ── Device flow ───────────────────────────────────────────
 
-  defp start_device_flow(from, state) do
-    case request_device_code() do
-      {:ok, device_code, user_code, verification_uri, interval} ->
-        print_auth_prompt(user_code, verification_uri)
-        parent = self()
-
-        Task.start(fn ->
-          result = poll_for_access_token(device_code, interval)
-          GenServer.cast(parent, {:device_flow_result, result, from})
-        end)
-
-        {:noreply, %{state | status: :pending}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
-  end
 
   defp start_device_flow_eager(state) do
     case request_device_code() do

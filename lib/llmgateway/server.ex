@@ -273,14 +273,14 @@ defmodule Llmgateway.Server do
 
         state = %{block_index: 0}
 
-        conn =
-          Enum.reduce_while(stream, conn, fn
-            :done, conn ->
-              {:halt, conn}
+        {conn, _state} =
+          Enum.reduce_while(stream, {conn, state}, fn
+            :done, {conn, state} ->
+              {:halt, {conn, state}}
 
-            chunk, conn ->
+            chunk, {conn, state} ->
               case Llmgateway.Convert.InboundAnthropic.chunk_to_anthropic_events(chunk, state) do
-                {:ok, events} ->
+                {:ok, events, new_state} ->
                   result =
                     Enum.reduce_while(events, {:ok, conn}, fn event, {:ok, c} ->
                       case chunk(c, "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n") do
@@ -290,12 +290,12 @@ defmodule Llmgateway.Server do
                     end)
 
                   case result do
-                    {:ok, conn} -> {:cont, conn}
-                    {:error, conn} -> {:halt, conn}
+                    {:ok, conn} -> {:cont, {conn, new_state}}
+                    {:error, conn} -> {:halt, {conn, new_state}}
                   end
 
-                :skip ->
-                  {:cont, conn}
+                {:skip, new_state} ->
+                  {:cont, {conn, new_state}}
               end
           end)
 
