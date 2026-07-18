@@ -43,6 +43,8 @@ defmodule Llmgateway.Auth.GitHubDevice do
     :access_token,
     :api_key,
     :api_key_expires_at,
+    :api_base,           # dynamic base URL from token exchange
+    :model_endpoints,    # %{"gpt-5.5" => ["/responses"], ...}
     :token_dir,
     :status
   ]
@@ -60,6 +62,16 @@ defmodule Llmgateway.Auth.GitHubDevice do
   """
   def get_token(server \\ __MODULE__) do
     GenServer.call(server, :get_token, 120_000)
+  end
+
+  @doc "Get the dynamic API base URL (from token exchange)."
+  def get_api_base(server \\ __MODULE__) do
+    GenServer.call(server, :get_api_base, 5_000)
+  end
+
+  @doc "Get the preferred endpoint path for a model."
+  def get_model_endpoint(server \\ __MODULE__, model_id) do
+    GenServer.call(server, {:get_model_endpoint, model_id}, 5_000)
   end
 
   # ── Server callbacks ──────────────────────────────────────
@@ -96,6 +108,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
     case get_valid_api_key(state) do
       {:ok, _key, state} ->
         Logger.info("[#{state.provider_name}] Using cached Copilot token")
+        state = if state.model_endpoints, do: state, else: fetch_model_endpoints(state)
         {:noreply, state}
 
       {:needs_refresh, state} ->
@@ -138,6 +151,26 @@ defmodule Llmgateway.Auth.GitHubDevice do
       {:needs_login, _new_state} ->
         {:reply, {:error, :auth_required}, state}
     end
+  end
+
+  @impl true
+  def handle_call(:get_api_base, _from, state) do
+    {:reply, state.api_base || "https://api.githubcopilot.com", state}
+  end
+
+  @impl true
+  def handle_call({:get_model_endpoint, model_id}, _from, state) do
+    endpoints = (state.model_endpoints || %{})[model_id] || ["/chat/completions"]
+
+    # Prefer /chat/completions if available, otherwise first endpoint
+    endpoint =
+      cond do
+        "/chat/completions" in endpoints -> "/chat/completions"
+        "/v1/messages" in endpoints -> "/v1/messages"
+        true -> List.first(endpoints) || "/chat/completions"
+      end
+
+    {:reply, endpoint, state}
   end
 
   @impl true
@@ -275,12 +308,12 @@ defmodule Llmgateway.Auth.GitHubDevice do
   end
 
   # ── API key exchange ──────────────────────────────────────
-
   defp refresh_api_key(%{access_token: token} = state) when is_binary(token) do
     headers = Map.put(@github_headers, "authorization", "token #{token}")
 
     case Req.get(@api_key_url, headers: headers) do
-      {:ok, %{status: 200, body: %{"token" => api_key, "expires_at" => expires_at}}} ->
+      {:ok, %{status: 200, body: %{"token" => api_key} = body}} ->
+        expires_at = body["expires_at"]
         exp =
           case DateTime.from_iso8601(to_string(expires_at)) do
             {:ok, dt, _} -> DateTime.to_unix(dt)
@@ -288,8 +321,20 @@ defmodule Llmgateway.Auth.GitHubDevice do
             _ -> :os.system_time(:second) + 1800
           end
 
-        new_state = %{state | api_key: api_key, api_key_expires_at: exp, status: :authenticated}
+        api_base = get_in(body, ["endpoints", "api"]) || "https://api.githubcopilot.com"
+
+        new_state = %{state |
+          api_key: api_key,
+          api_key_expires_at: exp,
+          api_base: api_base,
+          status: :authenticated
+        }
+
         save_api_key(new_state)
+
+        # Fetch model endpoints in background
+        new_state = fetch_model_endpoints(new_state)
+
         {:ok, api_key, new_state}
 
       {:ok, %{status: status, body: body}} ->
@@ -300,12 +345,42 @@ defmodule Llmgateway.Auth.GitHubDevice do
     end
   end
 
+  defp fetch_model_endpoints(state) do
+    headers = %{
+      "authorization" => "Bearer #{state.api_key}",
+      "copilot-integration-id" => "vscode-chat",
+      "editor-version" => "vscode/1.95.0",
+      "user-agent" => "GithubCopilot/1.155.0"
+    }
+
+    case Req.get("#{state.api_base}/models", headers: headers) do
+      {:ok, %{status: 200, body: %{"data" => models}}} ->
+        endpoints =
+          Map.new(models, fn m ->
+            {m["id"], m["supported_endpoints"] || ["/chat/completions"]}
+          end)
+
+        save_model_endpoints(state, endpoints)
+        Logger.info("[#{state.provider_name}] Cached #{map_size(endpoints)} model endpoints")
+        %{state | model_endpoints: endpoints}
+
+      {:ok, %{status: status}} ->
+        Logger.warning("[#{state.provider_name}] Failed to fetch models (#{status})")
+        load_model_endpoints(state)
+
+      {:error, reason} ->
+        Logger.warning("[#{state.provider_name}] Failed to fetch models: #{inspect(reason)}")
+        load_model_endpoints(state)
+    end
+  end
+
   # ── Disk caching ──────────────────────────────────────────
 
   defp load_cached_tokens(state) do
     state
     |> load_access_token()
     |> load_api_key()
+    |> load_model_endpoints()
   end
 
   defp load_access_token(state) do
@@ -327,7 +402,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
     case File.read(path) do
       {:ok, content} ->
         case Jason.decode(content) do
-          {:ok, %{"token" => key, "expires_at" => exp}} ->
+          {:ok, %{"token" => key, "expires_at" => exp} = data} ->
             exp_unix =
               case DateTime.from_iso8601(to_string(exp)) do
                 {:ok, dt, _} -> DateTime.to_unix(dt)
@@ -335,7 +410,8 @@ defmodule Llmgateway.Auth.GitHubDevice do
                 _ -> 0
               end
 
-            %{state | api_key: key, api_key_expires_at: exp_unix, status: :authenticated}
+            api_base = data["api_base"] || "https://api.githubcopilot.com"
+            %{state | api_key: key, api_key_expires_at: exp_unix, api_base: api_base, status: :authenticated}
 
           _ ->
             state
@@ -361,12 +437,36 @@ defmodule Llmgateway.Auth.GitHubDevice do
     data =
       Jason.encode!(%{
         "token" => state.api_key,
-        "expires_at" => state.api_key_expires_at
+        "expires_at" => state.api_key_expires_at,
+        "api_base" => state.api_base
       })
 
     case File.write(path, data) do
       :ok -> File.chmod(path, 0o600)
       {:error, reason} -> Logger.warning("[#{state.provider_name}] Cannot save API key: #{reason}")
+    end
+  end
+
+  defp save_model_endpoints(state, endpoints) do
+    path = Path.join(state.token_dir, "models.json")
+
+    case File.write(path, Jason.encode!(endpoints)) do
+      :ok -> File.chmod(path, 0o600)
+      {:error, reason} -> Logger.warning("[#{state.provider_name}] Cannot save models: #{reason}")
+    end
+  end
+
+  defp load_model_endpoints(state) do
+    path = Path.join(state.token_dir, "models.json")
+
+    case File.read(path) do
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, endpoints} when is_map(endpoints) ->
+            %{state | model_endpoints: endpoints}
+          _ -> state
+        end
+      _ -> state
     end
   end
 end
