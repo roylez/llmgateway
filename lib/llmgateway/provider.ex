@@ -7,7 +7,7 @@ defmodule Llmgateway.Provider do
 
   require Logger
 
-  alias Llmgateway.Deployment
+  alias Llmgateway.{Convert, Deployment}
 
   # ── Public API ────────────────────────────────────────────
 
@@ -17,8 +17,11 @@ defmodule Llmgateway.Provider do
   def call(%Deployment{} = deployment, body, opts \\ []) do
     timeout = opts[:timeout] || 120_000
 
-    body =
-      body
+    # Convert OpenAI body → provider native format
+    {provider_body, warnings} = Convert.to_provider(deployment, body)
+
+    provider_body =
+      provider_body
       |> Map.put("model", deployment.upstream_model)
       |> Map.delete("_llmgateway")
 
@@ -29,8 +32,8 @@ defmodule Llmgateway.Provider do
     url = request_path(deployment)
 
     req
-    |> Req.post(url: url, json: body)
-    |> handle_response(deployment)
+    |> Req.post(url: url, json: provider_body)
+    |> handle_response(deployment, warnings)
   end
 
   def retryable?(%{type: type}) when type in [:rate_limit, :server_error, :transport_error, :timeout], do: true
@@ -38,31 +41,32 @@ defmodule Llmgateway.Provider do
 
   # ── Response handling (pattern match on status) ───────────
 
-  defp handle_response({:ok, %{status: status, body: body}}, deployment) when status in 200..299 do
-    {:ok, attach_metadata(body, deployment)}
+  defp handle_response({:ok, %{status: status, body: body}}, deployment, warnings) when status in 200..299 do
+    canonical = Convert.to_canonical(deployment, body)
+    {:ok, attach_metadata(canonical, deployment, warnings)}
   end
 
-  defp handle_response({:ok, %{status: 429, body: body}}, deployment) do
+  defp handle_response({:ok, %{status: 429, body: body}}, deployment, _warnings) do
     Logger.warning("#{deployment.name}: rate limited")
     {:error, %{type: :rate_limit, status: 429, message: error_message(body), deployment: deployment.name}}
   end
 
-  defp handle_response({:ok, %{status: status, body: body}}, deployment) when status >= 500 do
+  defp handle_response({:ok, %{status: status, body: body}}, deployment, _warnings) when status >= 500 do
     Logger.warning("#{deployment.name}: server error #{status}")
     {:error, %{type: :server_error, status: status, message: error_message(body), deployment: deployment.name}}
   end
 
-  defp handle_response({:ok, %{status: status, body: body}}, deployment) do
+  defp handle_response({:ok, %{status: status, body: body}}, deployment, _warnings) do
     Logger.warning("#{deployment.name}: client error #{status}")
     {:error, %{type: :client_error, status: status, message: error_message(body), deployment: deployment.name}}
   end
 
-  defp handle_response({:error, %Req.TransportError{reason: reason}}, deployment) do
+  defp handle_response({:error, %Req.TransportError{reason: reason}}, deployment, _warnings) do
     Logger.warning("#{deployment.name}: transport error #{inspect(reason)}")
     {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
   end
 
-  defp handle_response({:error, reason}, deployment) do
+  defp handle_response({:error, reason}, deployment, _warnings) do
     Logger.warning("#{deployment.name}: #{inspect(reason)}")
     {:error, %{type: :unknown_error, reason: reason, deployment: deployment.name}}
   end
@@ -88,11 +92,19 @@ defmodule Llmgateway.Provider do
 
   # ── Helpers ───────────────────────────────────────────────
 
-  defp attach_metadata(body, deployment) do
-    Map.put_new(body, "_llmgateway", %{
+  defp attach_metadata(body, deployment, warnings) do
+    meta = %{
       "deployment" => deployment.name,
       "provider" => Atom.to_string(deployment.provider_type)
-    })
+    }
+
+    meta =
+      case warnings do
+        [] -> meta
+        ws -> Map.put(meta, "warnings", Enum.map(ws, fn {kind, msg} -> "#{kind}: #{msg}" end))
+      end
+
+    Map.put_new(body, "_llmgateway", meta)
   end
 
   defp error_message(%{"error" => %{"message" => msg}}), do: msg
