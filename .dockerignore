@@ -1,0 +1,9 @@
+_build/
+deps/
+.git/
+.gitignore
+*.md
+test/
+.formatter.exs
+.tool-versions
+docs/
