@@ -16,7 +16,6 @@ RUN mix deps.get --only prod
 RUN mix deps.compile
 
 COPY lib lib
-COPY config config 2>/dev/null || true
 RUN mix release
 
 # ==============================================
@@ -31,10 +30,16 @@ RUN apk update --no-cache && \
 WORKDIR /app
 
 RUN addgroup -S llmgateway && adduser -S llmgateway -G llmgateway -h /app
+RUN mkdir -p /config && chown llmgateway:llmgateway /config
+
 USER llmgateway
 
 COPY --chown=llmgateway:llmgateway --from=builder /app/_build/prod/rel/llmgateway .
 
+ENV LLMGATEWAY_CONFIG_PATH=/config/config.yaml
+ENV LLMGATEWAY_DATA_DIR=/config
+
+VOLUME /config
 EXPOSE 4000
 
 CMD ["./bin/llmgateway", "start"]

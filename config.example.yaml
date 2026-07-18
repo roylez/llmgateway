@@ -5,6 +5,9 @@
 
 server:
   port: 4000
+  # data_dir: /config            # where tokens are stored
+  #                               # Docker default: /config (same dir as this file)
+  #                               # Local default: ~/.config/llmgateway
 
 # ── API Keys ────────────────────────────────────────────────
 # Virtual keys for authenticating clients to the proxy.
@@ -45,7 +48,7 @@ providers:
   - name: copilot
     type: github_copilot
     # No api_key needed — uses GitHub device code flow automatically.
-    # Tokens cached to ~/.config/llmgateway/github_copilot/
+    # Tokens cached to data_dir/github_copilot/
 
   # Local Ollama (no auth required)
   - name: ollama

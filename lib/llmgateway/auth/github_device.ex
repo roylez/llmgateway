@@ -68,10 +68,12 @@ defmodule Llmgateway.Auth.GitHubDevice do
   def init(opts) do
     provider_name = opts[:provider_name] || "github_copilot"
 
-    token_dir =
-      System.get_env("GITHUB_COPILOT_TOKEN_DIR") ||
-        Path.join([System.user_home!(), ".config", "llmgateway", "github_copilot"])
+    base_dir =
+      opts[:data_dir] ||
+        System.get_env("LLMGATEWAY_DATA_DIR") ||
+        Path.join([System.user_home!(), ".config", "llmgateway"])
 
+    token_dir = Path.join(base_dir, "github_copilot")
     File.mkdir_p!(token_dir)
 
     state = %__MODULE__{
@@ -80,7 +82,6 @@ defmodule Llmgateway.Auth.GitHubDevice do
       status: :idle
     }
 
-    # Try loading cached tokens from disk
     state = load_cached_tokens(state)
 
     {:ok, state}

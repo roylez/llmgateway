@@ -6,7 +6,9 @@ defmodule Llmgateway.Application do
 
   @impl true
   def start(_type, _args) do
-    config_path = Application.get_env(:llmgateway, :config_path, "config/config.yaml")
+    config_path =
+      System.get_env("LLMGATEWAY_CONFIG_PATH") ||
+        Application.get_env(:llmgateway, :config_path, "config/config.yaml")
 
     children =
       if File.exists?(config_path) do
@@ -42,11 +44,13 @@ defmodule Llmgateway.Application do
   end
 
   defp github_device_servers(config) do
+    data_dir = get_in(config, ["server", "data_dir"])
+
     config["providers"]
     |> Enum.filter(fn p -> p.type == :github_copilot end)
     |> Enum.map(fn p ->
       name = :"github_device_#{p.name}"
-      opts = [provider_name: p.name, name: name]
+      opts = [provider_name: p.name, data_dir: data_dir, name: name]
 
       Supervisor.child_spec(
         {Llmgateway.Auth.GitHubDevice, opts},

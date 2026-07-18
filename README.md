@@ -22,7 +22,7 @@ git clone <repo-url> && cd llmgateway
 mix deps.get
 
 # Create your config
-cp config/config.example.yaml config/config.yaml
+cp config.example.yaml config/config.yaml
 # Edit config/config.yaml with your providers and API keys
 
 # Run
@@ -33,7 +33,7 @@ The proxy starts on the port defined in your config (default 4000).
 
 ## Configuration
 
-See `config/config.example.yaml` for a fully annotated example. The config has four sections:
+See `config.example.yaml` for a fully annotated example. The config has four sections:
 
 ### Providers
 
@@ -214,18 +214,43 @@ On first request, the proxy initiates a GitHub device code flow:
 ╚══════════════════════════════════════════════════╝
 ```
 
-Tokens are cached to `~/.config/llmgateway/github_copilot/` and auto-refresh.
+Tokens are cached to disk and auto-refresh. The storage location is resolved in order:
+
+1. `server.data_dir` in config YAML
+2. `LLMGATEWAY_DATA_DIR` environment variable
+3. `~/.config/llmgateway/` (default)
 
 ## Docker
+
+### docker-compose (recommended)
+
+```bash
+# Create config directory and config file
+mkdir -p config
+cp config.example.yaml config/config.yaml
+# Edit config/config.yaml with your providers and API keys
+
+docker compose up -d
+```
+
+### docker run
 
 ```bash
 docker build -t llmgateway .
 
 docker run -p 4000:4000 \
-  -v ./config/config.yaml:/app/config/config.yaml \
+  -v ./config:/config \
   -e OPENROUTER_API_KEY=sk-... \
   -e ANTHROPIC_API_KEY=sk-... \
   llmgateway
+```
+
+The container uses `/config` for both configuration and persistent data — matching the convention of many Docker applications. One mount holds everything:
+
+```
+config/
+  config.yaml              # proxy configuration
+  github_copilot/           # cached Copilot tokens (created automatically)
 ```
 
 ## Library Mode
