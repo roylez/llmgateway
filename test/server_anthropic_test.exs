@@ -8,7 +8,7 @@ defmodule Llmgateway.ServerAnthropicTest do
 
   setup do
     try do
-      if Process.whereis(Router), do: GenServer.stop(Router)
+      if pid = Process.whereis(Router), do: GenServer.stop(pid)
     catch
       :exit, _ -> :ok
     end

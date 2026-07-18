@@ -88,8 +88,31 @@ defmodule Llmgateway.Auth.GitHubDevice do
     }
 
     state = load_cached_tokens(state)
+    {:ok, state, {:continue, :maybe_auth}}
+  end
 
-    {:ok, state}
+  @impl true
+  def handle_continue(:maybe_auth, state) do
+    case get_valid_api_key(state) do
+      {:ok, _key, state} ->
+        Logger.info("[#{state.provider_name}] Using cached Copilot token")
+        {:noreply, state}
+
+      {:needs_refresh, state} ->
+        Logger.info("[#{state.provider_name}] Refreshing Copilot API key...")
+        case refresh_api_key(state) do
+          {:ok, _key, refreshed} ->
+            {:noreply, refreshed}
+          {:error, _} ->
+            Logger.info("[#{state.provider_name}] Refresh failed, starting device flow...")
+            start_device_flow_eager(state)
+            {:noreply, state}
+        end
+
+      {:needs_login, state} ->
+        start_device_flow_eager(state)
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -138,6 +161,28 @@ defmodule Llmgateway.Auth.GitHubDevice do
     GenServer.reply(from, {:error, reason})
     {:noreply, %{state | status: :idle}}
   end
+  @impl true
+  def handle_cast({:device_flow_result_eager, {:ok, access_token}}, state) do
+    Logger.info("[#{state.provider_name}] Device flow successful")
+
+    state = %{state | access_token: access_token, status: :authenticated}
+    save_access_token(state)
+
+    case refresh_api_key(state) do
+      {:ok, _api_key, new_state} ->
+        Logger.info("[#{state.provider_name}] Copilot API key obtained")
+        {:noreply, new_state}
+
+      {:error, reason} ->
+        Logger.warning("[#{state.provider_name}] API key exchange failed: #{inspect(reason)}")
+        {:noreply, state}
+    end
+  end
+
+  def handle_cast({:device_flow_result_eager, {:error, reason}}, state) do
+    Logger.warning("[#{state.provider_name}] Device flow failed: #{inspect(reason)}")
+    {:noreply, %{state | status: :idle}}
+  end
 
   # ── Token state checks ───────────────────────────────────
 
@@ -163,16 +208,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
   defp start_device_flow(from, state) do
     case request_device_code() do
       {:ok, device_code, user_code, verification_uri, interval} ->
-        Logger.info("""
-
-        ╔══════════════════════════════════════════════════╗
-        ║  GitHub Copilot Authorization                    ║
-        ║                                                  ║
-        ║  Go to: #{String.pad_trailing(verification_uri, 39)}║
-        ║  Enter code: #{String.pad_trailing(user_code, 34)}║
-        ╚══════════════════════════════════════════════════╝
-        """)
-
+        print_auth_prompt(user_code, verification_uri)
         parent = self()
 
         Task.start(fn ->
@@ -185,6 +221,37 @@ defmodule Llmgateway.Auth.GitHubDevice do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  defp start_device_flow_eager(state) do
+    case request_device_code() do
+      {:ok, device_code, user_code, verification_uri, interval} ->
+        print_auth_prompt(user_code, verification_uri)
+        parent = self()
+
+        Task.start(fn ->
+          result = poll_for_access_token(device_code, interval)
+          GenServer.cast(parent, {:device_flow_result_eager, result})
+        end)
+
+        {:ok, %{state | status: :pending}}
+
+      {:error, reason} ->
+        Logger.warning("[#{state.provider_name}] Device flow failed: #{inspect(reason)}")
+        {:ok, %{state | status: :idle}}
+    end
+  end
+
+  defp print_auth_prompt(user_code, verification_uri) do
+    IO.puts("""
+
+    ╔══════════════════════════════════════════════════╗
+    ║  GitHub Copilot Authorization                    ║
+    ║                                                  ║
+    ║  Go to: #{String.pad_trailing(verification_uri, 39)}║
+    ║  Enter code: #{String.pad_trailing(user_code, 34)}║
+    ╚══════════════════════════════════════════════════╝
+    """)
   end
 
   defp request_device_code do
