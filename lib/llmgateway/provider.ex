@@ -83,6 +83,28 @@ defmodule Llmgateway.Provider do
 
   # ── Auth (pattern match on provider type) ─────────────────
 
+  defp add_auth(req, %Deployment{provider_type: :github_copilot} = d) do
+    server_name = :"github_device_#{d.provider_name}"
+
+    case Process.whereis(server_name) do
+      nil ->
+        Logger.warning("#{d.name}: no GitHub auth server running")
+        req
+
+      _pid ->
+        case Llmgateway.Auth.GitHubDevice.get_token(server_name) do
+          {:ok, token} ->
+            req
+            |> Req.Request.put_header("authorization", "Bearer #{token}")
+            |> Req.Request.put_header("copilot-integration-id", "vscode-chat")
+
+          {:error, reason} ->
+            Logger.warning("#{d.name}: GitHub auth failed: #{inspect(reason)}")
+            req
+        end
+    end
+  end
+
   defp add_auth(req, %Deployment{api_key: nil}), do: req
 
   defp add_auth(req, %Deployment{provider_type: :anthropic, api_key: key}) do

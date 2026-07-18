@@ -12,9 +12,10 @@ defmodule Llmgateway.Application do
       if File.exists?(config_path) do
         case Llmgateway.Config.load(config_path) do
           {:ok, config} ->
+            auth_servers = github_device_servers(config)
             router = [{Llmgateway.Router, config}]
             server = maybe_start_server(config)
-            router ++ server
+            auth_servers ++ router ++ server
 
           {:error, reason} ->
             Logger.warning("Failed to load config from #{config_path}: #{inspect(reason)}")
@@ -38,5 +39,19 @@ defmodule Llmgateway.Application do
     else
       []
     end
+  end
+
+  defp github_device_servers(config) do
+    config["providers"]
+    |> Enum.filter(fn p -> p.type == :github_copilot end)
+    |> Enum.map(fn p ->
+      name = :"github_device_#{p.name}"
+      opts = [provider_name: p.name, name: name]
+
+      Supervisor.child_spec(
+        {Llmgateway.Auth.GitHubDevice, opts},
+        id: name
+      )
+    end)
   end
 end
