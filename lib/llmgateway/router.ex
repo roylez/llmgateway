@@ -3,14 +3,21 @@ defmodule Llmgateway.Router do
   GenServer that resolves model names to deployments, validates key access,
   and provides fallback chains.
 
-  ## State
+  ## Multi-deployment models
 
-    - `:providers` — map of provider_name → enriched provider config
-    - `:models` — map of model_name → enriched model config
-    - `:keys` — map of key_name → api_key value
-    - `:fallbacks` — list of %{primary: model_name, fallbacks: [model_name, ...]}
-    - `:model_key_map` — map of key_name → MapSet of accessible model names.
-           The special key `:_any` holds models accessible by all keys.
+  The same model name can appear multiple times with different providers
+  and key restrictions. Resolution picks the first deployment accessible
+  by the current key:
+
+      models:
+        - name: deepseek-v4-flash
+          provider: openrouter-work
+          keys: [work]
+        - name: deepseek-v4-flash
+          provider: openrouter
+          keys: [personal]
+
+  A request with `work` key gets the first entry; `personal` gets the second.
   """
 
   use GenServer
@@ -27,9 +34,8 @@ defmodule Llmgateway.Router do
   @doc """
   Resolve a model name to a deployment.
 
-  Returns `{:ok, %Deployment{}, fallbacks}` or `{:error, reason}`.
-  When a key is provided, checks key access first — if the primary model is
-  inaccessible but fallbacks exist, the primary is skipped and fallbacks returned.
+  When multiple deployments share a name, returns the first one accessible
+  by the given key. Returns `{:ok, %Deployment{}, fallbacks}` or `{:error, reason}`.
   """
   def resolve_model(name, opts \\ []) do
     GenServer.call(__MODULE__, {:resolve_model, name, opts}, :infinity)
@@ -67,34 +73,20 @@ defmodule Llmgateway.Router do
   @impl true
   def handle_call({:resolve_model, name, opts}, _from, state) do
     key_name = opts[:key]
+    fallbacks = find_fallbacks(name, state)
 
-    case state.models[name] do
-      nil ->
+    case resolve(name, key_name, state) do
+      {:ok, deployment} ->
+        {:reply, {:ok, deployment, fallbacks}, state}
+
+      :not_found ->
         {:reply, {:error, :not_found}, state}
 
-      model_config ->
-        case check_key_access(model_config, key_name, state) do
-          :ok ->
-            case build_deployment(model_config, state) do
-              {:ok, deployment} ->
-                fallbacks = find_fallbacks(name, state)
-                {:reply, {:ok, deployment, fallbacks}, state}
+      :forbidden when fallbacks != [] ->
+        {:reply, {:error, :forbidden, fallbacks}, state}
 
-              {:error, reason} ->
-                {:reply, {:error, reason}, state}
-            end
-
-          {:error, :forbidden} ->
-            if has_fallback?(name, state) do
-              fallbacks = find_fallbacks(name, state)
-              {:reply, {:error, :forbidden, fallbacks}, state}
-            else
-              {:reply, {:error, :forbidden}, state}
-            end
-
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
-        end
+      :forbidden ->
+        {:reply, {:error, :forbidden}, state}
     end
   end
 
@@ -111,21 +103,20 @@ defmodule Llmgateway.Router do
   @impl true
   def handle_call({:list_models, opts}, _from, state) do
     key_name = opts[:key]
-    allowed = if key_name, do: accessible_models(key_name, state), else: MapSet.new(Map.keys(state.models))
 
     models =
       state.models
-      |> Enum.filter(fn {name, _} -> name in allowed end)
-      |> Enum.map(fn {name, m} ->
-        %{
-          id: name,
-          object: "model",
-          owned_by: Atom.to_string(m.provider_type),
-          limits: %{
-            context: m.context,
-            output: m.output_limit
-          }
-        }
+      |> Enum.flat_map(fn {name, configs} ->
+        case find_accessible(configs, key_name) do
+          nil -> []
+          m ->
+            [%{
+              id: name,
+              object: "model",
+              owned_by: Atom.to_string(m.provider_type),
+              limits: %{context: m.context, output: m.output_limit}
+            }]
+        end
       end)
 
     {:reply, models, state}
@@ -141,7 +132,12 @@ defmodule Llmgateway.Router do
 
   defp build_state(config) do
     providers = Map.new(config["providers"], &{&1.name, &1})
-    models = Map.new(config["models"], &{&1.name, &1})
+
+    # Group models by name — same name can have multiple deployments
+    models =
+      config["models"]
+      |> Enum.group_by(& &1.name)
+
     keys = build_key_map(config["keys"])
     model_key_map = build_model_key_map(config["models"], keys)
     fallbacks = config["fallbacks"] || []
@@ -173,26 +169,38 @@ defmodule Llmgateway.Router do
     end)
   end
 
-  # ── Access control ────────────────────────────────────────
+  # ── Model resolution (pattern matching on key access) ────
 
-  defp check_key_access(_model_config, nil, _state), do: :ok
+  # No model entries for this name
+  defp resolve(name, _key_name, %{models: models}) when not is_map_key(models, name), do: :not_found
 
-  defp check_key_access(model_config, key_name, state) do
-    if model_config.keys do
-      key_models = accessible_models(key_name, state)
-
-      if model_config.name in key_models, do: :ok, else: {:error, :forbidden}
-    else
-      :ok
-    end
+  # No key provided — take the first deployment
+  defp resolve(name, nil, state) do
+    state.models[name]
+    |> List.first()
+    |> build_deployment(state)
   end
 
-  defp accessible_models(key_name, state) do
-    key_specific = Map.get(state.model_key_map, key_name, MapSet.new())
-    any_model = Map.get(state.model_key_map, :_any, MapSet.new())
-    MapSet.union(key_specific, any_model)
+  # Key provided — find first deployment accessible by this key
+  defp resolve(name, key_name, state) do
+    state.models[name]
+    |> Enum.find_value(:forbidden, fn
+      %{keys: nil} = config -> build_deployment(config, state)
+      %{keys: keys} = config when is_list(keys) ->
+        if key_name in keys, do: build_deployment(config, state), else: nil
+      config -> build_deployment(config, state)
+    end)
   end
 
+  defp find_accessible(configs, nil), do: List.first(configs)
+
+  defp find_accessible(configs, key_name) do
+    Enum.find(configs, fn
+      %{keys: nil} -> true
+      %{keys: keys} when is_list(keys) -> key_name in keys
+      _ -> true
+    end)
+  end
   # ── Deployment building ───────────────────────────────────
 
   defp build_deployment(model_config, state) do
@@ -222,14 +230,13 @@ defmodule Llmgateway.Router do
     state.fallbacks
     |> Enum.find_value([], fn
       %{primary: ^model_name, fallbacks: fbs} -> fbs
-      %{^model_name => fbs} -> fbs  # literal map format
+      %{^model_name => fbs} -> fbs
       [%{^model_name => fbs}] -> fbs
       _ -> nil
     end)
     |> case do
       fbs when is_list(fbs) -> fbs
       nil ->
-        # Check for generic fallback
         state.fallbacks
         |> Enum.find_value([], fn
           %{primary: "*", fallbacks: fbs} -> fbs
@@ -251,7 +258,6 @@ defmodule Llmgateway.Router do
   # ── Helpers ──────────────────────────────────────────────
 
   defp secure_compare(a, b) when is_binary(a) and is_binary(b) do
-    # Constant-time comparison to prevent timing attacks
     a_bytes = :erlang.binary_to_list(a)
     b_bytes = :erlang.binary_to_list(b)
 

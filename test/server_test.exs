@@ -57,7 +57,8 @@ defmodule Llmgateway.ServerTest do
       body = json_response(conn)
       names = Enum.map(body["data"], & &1["id"])
       assert "gpt-4o-mini" in names
-      refute "deepseek-v4-flash" in names
+      # With multi-deployment, personal-key has its own deepseek-v4-flash deployment
+      assert "deepseek-v4-flash" in names
     end
 
     test "models include limits" do

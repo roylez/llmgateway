@@ -6,7 +6,6 @@ defmodule Llmgateway.RouterTest do
   @fixtures_path "test/fixtures"
 
   setup do
-    # Stop the router if running from Application boot
     if Process.whereis(Router), do: GenServer.stop(Router)
 
     {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
@@ -46,19 +45,46 @@ defmodule Llmgateway.RouterTest do
       assert {:ok, _deployment, _} = Router.resolve_model("gpt-4o-mini", key: "personal-key")
     end
 
-    test "model with keys is only accessible by listed keys" do
-      assert {:ok, _deployment, _} = Router.resolve_model("deepseek-v4-flash", key: "work-key")
-    end
-
-    test "model with keys is forbidden for unlisted keys but returns fallbacks" do
-      result = Router.resolve_model("deepseek-v4-flash", key: "personal-key")
-      # Should be forbidden but may include fallbacks
-      assert match?({:error, :forbidden, _fallbacks}, result) or
-             match?({:error, :forbidden}, result)
+    test "model with keys is accessible by listed keys" do
+      assert {:ok, deployment, _} = Router.resolve_model("deepseek-v4-flash", key: "work-key")
+      assert deployment.provider_name == "openrouter"
     end
 
     test "model with no keys is accessible without key" do
       assert {:ok, _deployment, _} = Router.resolve_model("gpt-4o-mini")
+    end
+  end
+
+  describe "multi-deployment models" do
+    test "same model name resolves to different providers by key" do
+      {:ok, work_deploy, _} = Router.resolve_model("deepseek-v4-flash", key: "work-key")
+      {:ok, personal_deploy, _} = Router.resolve_model("deepseek-v4-flash", key: "personal-key")
+
+      assert work_deploy.provider_name == "openrouter"
+      assert personal_deploy.provider_name == "openrouter-personal"
+      assert work_deploy.name == personal_deploy.name
+    end
+
+    test "without key, resolves to first deployment" do
+      {:ok, deployment, _} = Router.resolve_model("deepseek-v4-flash")
+      assert deployment.provider_name == "openrouter"
+    end
+
+    test "lists model once even with multiple deployments" do
+      models = Router.list_models()
+      names = Enum.map(models, & &1.id)
+      assert length(Enum.filter(names, &(&1 == "deepseek-v4-flash"))) == 1
+    end
+
+    test "list_models picks deployment matching the key" do
+      work_models = Router.list_models(key: "work-key")
+      personal_models = Router.list_models(key: "personal-key")
+
+      work_deepseek = Enum.find(work_models, &(&1.id == "deepseek-v4-flash"))
+      personal_deepseek = Enum.find(personal_models, &(&1.id == "deepseek-v4-flash"))
+
+      assert work_deepseek != nil
+      assert personal_deepseek != nil
     end
   end
 
@@ -79,14 +105,6 @@ defmodule Llmgateway.RouterTest do
       names = Enum.map(models, & &1.id)
       assert "gpt-4o-mini" in names
       assert "deepseek-v4-flash" in names
-    end
-
-    test "lists only accessible models for a key" do
-      models = Router.list_models(key: "personal-key")
-      names = Enum.map(models, & &1.id)
-      assert "gpt-4o-mini" in names
-      # deepseek-v4-flash restricted to work-key only
-      refute "deepseek-v4-flash" in names
     end
 
     test "includes model limits" do

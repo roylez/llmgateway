@@ -12,16 +12,27 @@ providers:
     type: openrouter
     api_key: test-openrouter-key
 
+  - name: openrouter-personal
+    type: openrouter
+    api_key: test-openrouter-personal-key
+
   - name: openai-main
     type: openai
     api_key: test-openai-key
 
 models:
+  # Multi-deployment: same name, different providers and keys
   - name: deepseek-v4-flash
     provider: openrouter
     model: deepseek/deepseek-chat
     keys:
       - work-key
+
+  - name: deepseek-v4-flash
+    provider: openrouter-personal
+    model: deepseek/deepseek-chat
+    keys:
+      - personal-key
 
   - name: gpt-4o-mini
     provider: openai-main
