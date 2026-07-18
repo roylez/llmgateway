@@ -112,7 +112,7 @@ defmodule Llmgateway.Config do
         |> Map.put("providers", enriched_providers)
         |> Map.put("models", enriched_models)
         |> Map.put("keys", normalize_key_list(config["keys"]))
-        |> Map.put("fallbacks", config["fallbacks"] || [])
+        |> Map.put("fallbacks", normalize_fallbacks(config["fallbacks"]))
 
       {:ok, config}
     end
@@ -126,6 +126,11 @@ defmodule Llmgateway.Config do
 
   defp normalize_key_list(list) when is_list(list), do: list
   defp normalize_key_list(nil), do: []
+
+  # Fallbacks as a map: %{"gpt-4o" => ["claude-sonnet"], "*" => ["gpt-4o-mini"]}
+  defp normalize_fallbacks(nil), do: %{}
+  defp normalize_fallbacks(map) when is_map(map), do: map
+  defp normalize_fallbacks(_), do: %{}
 
   defp enrich_providers(providers) do
     providers

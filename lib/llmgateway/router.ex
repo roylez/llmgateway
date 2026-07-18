@@ -240,29 +240,8 @@ defmodule Llmgateway.Router do
 
   # ── Fallback resolution ──────────────────────────────────
 
-  defp find_fallbacks(model_name, state) do
-    state.fallbacks
-    |> Enum.find_value([], fn
-      %{primary: ^model_name, fallbacks: fbs} -> fbs
-      %{^model_name => fbs} -> fbs
-      [%{^model_name => fbs}] -> fbs
-      _ -> nil
-    end)
-    |> case do
-      fbs when is_list(fbs) -> fbs
-      nil ->
-        state.fallbacks
-        |> Enum.find_value([], fn
-          %{primary: "*", fallbacks: fbs} -> fbs
-          %{"*" => fbs} -> fbs
-          [%{"*" => fbs}] -> fbs
-          _ -> nil
-        end)
-        |> case do
-          nil -> []
-          fbs -> fbs
-        end
-    end
+  defp find_fallbacks(model_name, %{fallbacks: fallbacks}) do
+    Map.get(fallbacks, model_name) || Map.get(fallbacks, "*") || []
   end
 
 

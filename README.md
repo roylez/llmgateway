@@ -104,8 +104,8 @@ When a deployment fails with a retryable error, try the next model in the chain.
 
 ```yaml
 fallbacks:
-  - gpt-4o: [claude-sonnet, deepseek-v3]
-  - "*": [gpt-4o-mini]              # catch-all
+  gpt-4o: [claude-sonnet, deepseek/deepseek-chat]
+  "*": [gpt-4o-mini]              # catch-all
 ```
 
 ## API Endpoints
