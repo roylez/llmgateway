@@ -169,9 +169,10 @@ defmodule Llmgateway.Convert.InboundAnthropic do
         events
       end
 
-    # Finish reason → message_delta + message_stop
+    # Finish reason → message_delta + message_stop (only once)
+    finished = state[:finished] || false
     events =
-      if finish_reason do
+      if finish_reason && not finished do
         stop_reason = Map.get(@finish_reason_map, finish_reason, "end_turn")
 
         usage_event = %{
@@ -189,7 +190,10 @@ defmodule Llmgateway.Convert.InboundAnthropic do
         events
       end
 
-    new_state = Map.put(state, :started, true)
+    new_state =
+      state
+      |> Map.put(:started, true)
+      |> Map.put(:finished, finished || finish_reason != nil)
 
     if events == [], do: {:skip, new_state}, else: {:ok, events, new_state}
   end
