@@ -24,6 +24,8 @@ defmodule Llmgateway.MixProject do
       {:llm_db, "~> 2026.0"},
       {:yaml_elixir, "~> 2.11"},
       {:jason, "~> 1.4"},
+      {:bandit, "~> 1.6"},
+      {:plug, "~> 1.16"},
       {:mox, "~> 1.2", only: :test}
     ]
   end

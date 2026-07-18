@@ -40,13 +40,37 @@ defmodule Llmgateway do
         Fallback.call_with_fallback(deployment, fallbacks, body, opts)
 
       {:error, :forbidden, fallbacks} ->
-        # Primary is forbidden but fallbacks exist — try them
-        Fallback.call_with_fallback(nil, [model | fallbacks], body, opts)
+        # Primary is forbidden but fallbacks exist — try them directly
+        try_fallback_only(fallbacks, body, opts)
 
       {:error, :not_found} ->
         {:error, %{type: :not_found, message: "Model '#{model}' not found"}}
 
       {:error, :forbidden} ->
+        {:error, %{type: :forbidden, message: "Key does not have access to model '#{model}'"}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Stream a chat completion. Returns `{:ok, stream}` where stream yields OpenAI chunks.
+  """
+  def stream_text(model, body, opts \\ []) do
+    key_name = opts[:key]
+
+    case Router.resolve_model(model, key: key_name) do
+      {:ok, deployment, _fallbacks} ->
+        Llmgateway.Stream.call(deployment, body, opts)
+
+      {:error, :not_found} ->
+        {:error, %{type: :not_found, message: "Model '#{model}' not found"}}
+
+      {:error, :forbidden} ->
+        {:error, %{type: :forbidden, message: "Key does not have access to model '#{model}'"}}
+
+      {:error, :forbidden, _fallbacks} ->
         {:error, %{type: :forbidden, message: "Key does not have access to model '#{model}'"}}
 
       {:error, reason} ->
@@ -67,4 +91,21 @@ defmodule Llmgateway do
   def resolve_key(token) do
     Router.resolve_key(token)
   end
+  defp try_fallback_only([], _body, _opts) do
+    {:error, %{type: :forbidden, message: "No accessible fallbacks"}}
+  end
+
+  defp try_fallback_only([fb_name | rest], body, opts) do
+    case Router.resolve_model(fb_name, key: opts[:key]) do
+      {:ok, deployment, more_fallbacks} ->
+        Fallback.call_with_fallback(deployment, more_fallbacks ++ rest, body, opts)
+
+      {:error, :forbidden, _} ->
+        try_fallback_only(rest, body, opts)
+
+      {:error, _} ->
+        try_fallback_only(rest, body, opts)
+    end
+  end
+
 end

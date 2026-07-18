@@ -130,7 +130,7 @@ defmodule Llmgateway.Config do
     result =
       providers
       |> Enum.map(fn p ->
-        type = String.to_existing_atom(p["type"])
+        type = String.to_atom(p["type"])
 
         case LLMDB.provider(type) do
           {:ok, provider_meta} ->

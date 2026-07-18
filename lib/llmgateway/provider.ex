@@ -7,7 +7,7 @@ defmodule Llmgateway.Provider do
 
   require Logger
 
-  alias Llmgateway.{Convert, Deployment}
+  alias Llmgateway.{Convert, Deployment, Telemetry}
 
   # ── Public API ────────────────────────────────────────────
 
@@ -16,6 +16,7 @@ defmodule Llmgateway.Provider do
   """
   def call(%Deployment{} = deployment, body, opts \\ []) do
     timeout = opts[:timeout] || 120_000
+    tel = Telemetry.request_start(deployment)
 
     # Convert OpenAI body → provider native format
     {provider_body, warnings} = Convert.to_provider(deployment, body)
@@ -31,9 +32,18 @@ defmodule Llmgateway.Provider do
 
     url = request_path(deployment)
 
-    req
-    |> Req.post(url: url, json: provider_body)
-    |> handle_response(deployment, warnings)
+    result =
+      req
+      |> Req.post(url: url, json: provider_body)
+      |> handle_response(deployment, warnings)
+
+    case result do
+      {:ok, _} -> Telemetry.request_stop(tel, 200)
+      {:error, %{status: s}} -> Telemetry.request_exception(tel, :error, %{status: s})
+      {:error, reason} -> Telemetry.request_exception(tel, :error, reason)
+    end
+
+    result
   end
 
   def retryable?(%{type: type}) when type in [:rate_limit, :server_error, :transport_error, :timeout], do: true

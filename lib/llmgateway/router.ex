@@ -45,6 +45,17 @@ defmodule Llmgateway.Router do
     GenServer.call(__MODULE__, {:list_models, opts})
   end
 
+  @doc "Reload config from a file path."
+  def reload(config_path) do
+    case Llmgateway.Config.load(config_path) do
+      {:ok, config} ->
+        GenServer.call(__MODULE__, {:reload, config})
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # ── Server callbacks ──────────────────────────────────────
 
   @impl true
@@ -118,6 +129,12 @@ defmodule Llmgateway.Router do
       end)
 
     {:reply, models, state}
+  end
+
+  @impl true
+  def handle_call({:reload, config}, _from, _state) do
+    new_state = build_state(config)
+    {:reply, :ok, new_state}
   end
 
   # ── State construction ────────────────────────────────────

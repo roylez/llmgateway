@@ -12,7 +12,9 @@ defmodule Llmgateway.Application do
       if File.exists?(config_path) do
         case Llmgateway.Config.load(config_path) do
           {:ok, config} ->
-            [{Llmgateway.Router, config}]
+            router = [{Llmgateway.Router, config}]
+            server = maybe_start_server(config)
+            router ++ server
 
           {:error, reason} ->
             Logger.warning("Failed to load config from #{config_path}: #{inspect(reason)}")
@@ -25,5 +27,16 @@ defmodule Llmgateway.Application do
 
     opts = [strategy: :one_for_one, name: Llmgateway.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp maybe_start_server(config) do
+    port = get_in(config, ["server", "port"])
+
+    if port do
+      Logger.info("Starting HTTP server on port #{port}")
+      [{Bandit, plug: Llmgateway.Server, port: port}]
+    else
+      []
+    end
   end
 end
