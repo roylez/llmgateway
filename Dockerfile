@@ -25,7 +25,7 @@ FROM alpine:${alpine_version}
 ENV LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 LANGUAGE=en_US.UTF-8
 
 RUN apk update --no-cache && \
-    apk add --no-cache bash libstdc++ ncurses-libs openssl
+    apk add --no-cache bash libstdc++ ncurses-libs openssl ca-certificates
 
 WORKDIR /app
 

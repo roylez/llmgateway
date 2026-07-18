@@ -65,15 +65,16 @@ defmodule Llmgateway.RouterTest do
       assert work_deploy.name == personal_deploy.name
     end
 
-    test "without key, resolves to first deployment" do
-      {:ok, deployment, _} = Router.resolve_model("deepseek-v4-flash")
-      assert deployment.provider_name == "openrouter"
+    test "without key, key-restricted model is forbidden" do
+      result = Router.resolve_model("deepseek-v4-flash")
+      assert match?({:error, :forbidden}, result) or match?({:error, :forbidden, _}, result)
     end
 
-    test "lists model once even with multiple deployments" do
+    test "list_models without key excludes key-restricted models" do
       models = Router.list_models()
       names = Enum.map(models, & &1.id)
-      assert length(Enum.filter(names, &(&1 == "deepseek-v4-flash"))) == 1
+      refute "deepseek-v4-flash" in names
+      assert "gpt-4o-mini" in names
     end
 
     test "list_models picks deployment matching the key" do
@@ -100,11 +101,12 @@ defmodule Llmgateway.RouterTest do
   end
 
   describe "list_models/1" do
-    test "lists all models without key filter" do
+    test "lists unrestricted models without key filter" do
       models = Router.list_models()
       names = Enum.map(models, & &1.id)
       assert "gpt-4o-mini" in names
-      assert "deepseek-v4-flash" in names
+      # key-restricted models not shown without a key
+      refute "deepseek-v4-flash" in names
     end
 
     test "includes model limits" do

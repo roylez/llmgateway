@@ -44,7 +44,7 @@ defmodule Llmgateway.Stream do
         stream =
           resp.body
           |> to_sse_stream(resp)
-          |> Stream.flat_map(&parse_sse_lines/1)
+          |> Stream.transform("", &buffer_sse_lines/2)
           |> Stream.flat_map(&decode_and_convert(&1, deployment))
 
         {:ok, stream}
@@ -78,6 +78,22 @@ defmodule Llmgateway.Stream do
     |> String.split("\n")
     |> Enum.filter(&String.starts_with?(&1, "data: "))
     |> Enum.map(&String.trim_leading(&1, "data: "))
+  end
+
+  # Buffer partial lines across SSE chunks
+  defp buffer_sse_lines(chunk, buffer) when is_binary(chunk) do
+    combined = buffer <> chunk
+    lines = String.split(combined, "\n")
+
+    # Last element may be partial — carry it as the new buffer
+    {complete, [remainder]} = Enum.split(lines, -1)
+
+    data_lines =
+      complete
+      |> Enum.filter(&String.starts_with?(&1, "data: "))
+      |> Enum.map(&String.trim_leading(&1, "data: "))
+
+    {data_lines, remainder}
   end
 
   defp decode_and_convert("[DONE]", _deployment), do: [:done]

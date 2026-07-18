@@ -55,18 +55,18 @@ providers:
     type: ollama
 
 # ── Models ──────────────────────────────────────────────────
-# Each model defines a local alias that clients use.
+# Each model maps a local name to an upstream provider model.
 # `provider` references a named provider above.
 # `model` is the upstream model ID as the provider knows it.
+# `name` is optional — defaults to the `model` value if omitted.
 # `keys` restricts access — omit to allow all keys.
 #
 # Model metadata (context length, output limit, capabilities)
 # is sourced automatically from llmdb.xyz.
 
 models:
-  # OpenRouter models
-  - name: deepseek-v3
-    provider: openrouter
+  # Shorthand — name defaults to "deepseek/deepseek-chat"
+  - provider: openrouter
     model: deepseek/deepseek-chat
 
   - name: deepseek-v3-work

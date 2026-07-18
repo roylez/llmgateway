@@ -60,15 +60,16 @@ defmodule Llmgateway.Config do
   end
 
   defp resolve_env_vars(value) when is_list(value) do
-    result =
-      value
-      |> Enum.map(&resolve_env_vars/1)
-      |> Enum.reduce_while({:ok, []}, fn
-        {:ok, v}, {:ok, acc} -> {:cont, {:ok, acc ++ [v]}}
-        {:error, _} = err, _ -> {:halt, err}
-      end)
-
-    result
+    value
+    |> Enum.map(&resolve_env_vars/1)
+    |> Enum.reduce_while({:ok, []}, fn
+      {:ok, v}, {:ok, acc} -> {:cont, {:ok, [v | acc]}}
+      {:error, _} = err, _ -> {:halt, err}
+    end)
+    |> case do
+      {:ok, list} -> {:ok, Enum.reverse(list)}
+      error -> error
+    end
   end
 
   defp resolve_env_vars(value), do: {:ok, value}
@@ -127,85 +128,82 @@ defmodule Llmgateway.Config do
   defp normalize_key_list(nil), do: []
 
   defp enrich_providers(providers) do
-    result =
-      providers
-      |> Enum.map(fn p ->
-        type = String.to_atom(p["type"])
+    providers
+    |> Enum.map(fn p ->
+      type = String.to_atom(p["type"])
 
-        case LLMDB.provider(type) do
-          {:ok, provider_meta} ->
-            {:ok,
-             %{
-               name: p["name"],
-               type: type,
-               api_key: p["api_key"],
-               client_id: p["client_id"],
-               runtime: provider_meta.runtime,
-               base_url: (provider_meta.runtime && provider_meta.runtime.base_url) ||
-                           provider_meta.base_url
-             }}
+      case LLMDB.provider(type) do
+        {:ok, provider_meta} ->
+          {:ok,
+           %{
+             name: p["name"],
+             type: type,
+             api_key: p["api_key"],
+             client_id: p["client_id"],
+             runtime: provider_meta.runtime,
+             base_url: (provider_meta.runtime && provider_meta.runtime.base_url) ||
+                         provider_meta.base_url
+           }}
 
-          :error ->
-            {:error, "unknown provider type '#{p["type"]}' for provider '#{p["name"]}'"}
-        end
-      end)
-      |> Enum.reduce_while({:ok, []}, fn
-        {:ok, p}, {:ok, acc} -> {:cont, {:ok, acc ++ [p]}}
-        {:error, _} = err, _ -> {:halt, err}
-      end)
-
-    result
+        :error ->
+          {:error, "unknown provider type '#{p["type"]}' for provider '#{p["name"]}'"}
+      end
+    end)
+    |> Enum.reduce_while({:ok, []}, fn
+      {:ok, p}, {:ok, acc} -> {:cont, {:ok, [p | acc]}}
+      {:error, _} = err, _ -> {:halt, err}
+    end)
+    |> case do
+      {:ok, list} -> {:ok, Enum.reverse(list)}
+      error -> error
+    end
   end
 
   defp enrich_models(models, providers) do
     provider_map = Map.new(providers, &{&1.name, &1})
 
-    result =
-      models
-      |> Enum.map(fn m ->
-        provider = provider_map[m["provider"]]
+    models
+    |> Enum.map(fn m ->
+      provider = provider_map[m["provider"]]
 
-        if is_nil(provider) do
-          {:error, "model '#{m["name"]}' references unknown provider '#{m["provider"]}'"}
-        else
-          model_id = m["model"]
-          upstream_model = resolve_upstream_model(provider.type, model_id)
+      if is_nil(provider) do
+        name = m["name"] || m["model"]
+        {:error, "model '#{name}' references unknown provider '#{m["provider"]}'"}
+      else
+        model_id = m["model"]
+        upstream_model = resolve_upstream_model(provider.type, model_id)
+        name = m["name"] || model_id
 
-          {context, output_limit} =
-            case LLMDB.model({provider.type, upstream_model}) do
-              {:ok, md} ->
-                {md.limits.context, md.limits.output}
+        {context, output_limit} =
+          case LLMDB.model({provider.type, upstream_model}) do
+            {:ok, md} -> {md.limits.context, md.limits.output}
+            _ -> {nil, nil}
+          end
 
-              _ ->
-                {nil, nil}
-            end
-
-          {:ok,
-           %{
-             name: m["name"],
-             provider_name: provider.name,
-             provider_type: provider.type,
-             upstream_model: upstream_model,
-             keys: m["keys"],
-             context: context,
-             output_limit: output_limit
-           }}
-        end
-      end)
-      |> Enum.reduce_while({:ok, []}, fn
-        {:ok, m}, {:ok, acc} -> {:cont, {:ok, acc ++ [m]}}
-        {:error, _} = err, _ -> {:halt, err}
-      end)
-
-    result
-  end
-
-  # Handle provider-prefixed model ids like "deepseek/deepseek-v4-flash"
-  # by stripping the prefix since we already have the provider context.
-  defp resolve_upstream_model(_provider_type, model_id) do
-    case String.split(model_id, "/", parts: 2) do
-      [_, rest] -> rest
-      _ -> model_id
+        {:ok,
+         %{
+           name: name,
+           provider_name: provider.name,
+           provider_type: provider.type,
+           upstream_model: upstream_model,
+           keys: m["keys"],
+           context: context,
+           output_limit: output_limit
+         }}
+      end
+    end)
+    |> Enum.reduce_while({:ok, []}, fn
+      {:ok, m}, {:ok, acc} -> {:cont, {:ok, [m | acc]}}
+      {:error, _} = err, _ -> {:halt, err}
+    end)
+    |> case do
+      {:ok, list} -> {:ok, Enum.reverse(list)}
+      error -> error
     end
   end
+
+  # Pass through model ID as-is. The user specifies the upstream ID
+  # exactly as the provider expects it (e.g. "deepseek/deepseek-chat"
+  # for OpenRouter, "gpt-4o-mini" for OpenAI).
+  defp resolve_upstream_model(_provider_type, model_id), do: model_id
 end

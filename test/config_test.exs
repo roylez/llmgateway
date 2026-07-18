@@ -28,6 +28,26 @@ defmodule Llmgateway.ConfigTest do
       assert model.context > 0
     end
 
+    test "defaults model name to model ID when name omitted" do
+      yaml_path = Path.join(@fixtures_path, "config_no_name.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+      models:
+        - provider: openai
+          model: gpt-4o-mini
+      """)
+
+      assert {:ok, config} = Config.load(yaml_path)
+      [model] = config["models"]
+      assert model.name == "gpt-4o-mini"
+    after
+      File.rm("test/fixtures/config_no_name.yaml")
+    end
+
     test "resolves $VAR from environment" do
       System.put_env("TEST_LLM_KEY", "resolved-key-value")
 

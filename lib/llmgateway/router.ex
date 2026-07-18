@@ -38,7 +38,7 @@ defmodule Llmgateway.Router do
   by the given key. Returns `{:ok, %Deployment{}, fallbacks}` or `{:error, reason}`.
   """
   def resolve_model(name, opts \\ []) do
-    GenServer.call(__MODULE__, {:resolve_model, name, opts}, :infinity)
+    GenServer.call(__MODULE__, {:resolve_model, name, opts}, 5_000)
   end
 
   @doc "Resolve an API key token to a key name."
@@ -94,7 +94,7 @@ defmodule Llmgateway.Router do
   def handle_call({:resolve_key, token}, _from, state) do
     result =
       Enum.find_value(state.keys, {:error, :invalid_key}, fn {name, value} ->
-        if secure_compare(value, token), do: {:ok, name}
+        if Plug.Crypto.secure_compare(value, token), do: {:ok, name}
       end)
 
     {:reply, result, state}
@@ -174,25 +174,39 @@ defmodule Llmgateway.Router do
   # No model entries for this name
   defp resolve(name, _key_name, %{models: models}) when not is_map_key(models, name), do: :not_found
 
-  # No key provided — take the first deployment
+  # No key provided — take first unrestricted deployment
   defp resolve(name, nil, state) do
-    state.models[name]
-    |> List.first()
-    |> build_deployment(state)
+    case find_accessible(state.models[name], nil) do
+      nil -> :forbidden
+      config ->
+        case build_deployment(config, state) do
+          {:ok, _} = ok -> ok
+          {:error, _} -> :forbidden
+        end
+    end
   end
 
   # Key provided — find first deployment accessible by this key
   defp resolve(name, key_name, state) do
-    state.models[name]
-    |> Enum.find_value(:forbidden, fn
-      %{keys: nil} = config -> build_deployment(config, state)
-      %{keys: keys} = config when is_list(keys) ->
-        if key_name in keys, do: build_deployment(config, state), else: nil
-      config -> build_deployment(config, state)
+    case find_accessible(state.models[name], key_name) do
+      nil -> :forbidden
+      config ->
+        case build_deployment(config, state) do
+          {:ok, _} = ok -> ok
+          {:error, _} -> :forbidden
+        end
+    end
+  end
+
+  defp find_accessible(configs, nil) do
+    Enum.find(configs, fn
+      %{keys: nil} -> true
+      %{keys: []} -> false
+      %{keys: _} -> false
+      _ -> true
     end)
   end
 
-  defp find_accessible(configs, nil), do: List.first(configs)
 
   defp find_accessible(configs, key_name) do
     Enum.find(configs, fn
@@ -251,23 +265,5 @@ defmodule Llmgateway.Router do
     end
   end
 
-  defp has_fallback?(model_name, state) do
-    find_fallbacks(model_name, state) != []
-  end
 
-  # ── Helpers ──────────────────────────────────────────────
-
-  defp secure_compare(a, b) when is_binary(a) and is_binary(b) do
-    a_bytes = :erlang.binary_to_list(a)
-    b_bytes = :erlang.binary_to_list(b)
-
-    if length(a_bytes) == length(b_bytes) do
-      Enum.zip(a_bytes, b_bytes)
-      |> Enum.reduce(0, fn {x, y}, acc -> Bitwise.bor(acc, Bitwise.bxor(x, y)) end) == 0
-    else
-      false
-    end
-  end
-
-  defp secure_compare(_, _), do: false
 end

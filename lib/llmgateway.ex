@@ -67,10 +67,11 @@ defmodule Llmgateway do
       {:error, :not_found} ->
         {:error, %{type: :not_found, message: "Model '#{model}' not found"}}
 
-      {:error, :forbidden} ->
-        {:error, %{type: :forbidden, message: "Key does not have access to model '#{model}'"}}
+      {:error, :forbidden, fallbacks} ->
+        # Try fallbacks for streaming too
+        try_stream_fallback(fallbacks, body, opts)
 
-      {:error, :forbidden, _fallbacks} ->
+      {:error, :forbidden} ->
         {:error, %{type: :forbidden, message: "Key does not have access to model '#{model}'"}}
 
       {:error, reason} ->
@@ -105,6 +106,23 @@ defmodule Llmgateway do
 
       {:error, _} ->
         try_fallback_only(rest, body, opts)
+    end
+  end
+
+  defp try_stream_fallback([], _body, _opts) do
+    {:error, %{type: :forbidden, message: "No accessible fallbacks"}}
+  end
+
+  defp try_stream_fallback([fb_name | rest], body, opts) do
+    case Router.resolve_model(fb_name, key: opts[:key]) do
+      {:ok, deployment, _} ->
+        Llmgateway.Stream.call(deployment, body, opts)
+
+      {:error, :forbidden, _} ->
+        try_stream_fallback(rest, body, opts)
+
+      {:error, _} ->
+        try_stream_fallback(rest, body, opts)
     end
   end
 

@@ -53,18 +53,33 @@ Environment variables use `$VAR` syntax and are resolved at boot.
 
 ### Models
 
-Define local aliases that clients use. Each model references a named provider and an upstream model ID.
+Each model maps a local name to an upstream provider model. `name` is optional — defaults to the `model` value.
 
 ```yaml
 models:
-  - name: deepseek-v3
-    provider: openrouter
+  # Shorthand — clients request "deepseek/deepseek-chat"
+  - provider: openrouter
     model: deepseek/deepseek-chat
 
+  # Explicit name — clients request "gpt-4o"
   - name: gpt-4o
     provider: openai
     model: gpt-4o
     keys: [prod]          # restrict to specific keys
+```
+
+Same model name can appear multiple times with different providers and keys. The proxy picks the first deployment accessible by the current key:
+
+```yaml
+  - name: deepseek
+    provider: openrouter-work
+    model: deepseek/deepseek-chat
+    keys: [work]
+
+  - name: deepseek
+    provider: openrouter
+    model: deepseek/deepseek-chat
+    keys: [personal]
 ```
 
 Model metadata (context length, output limits) is sourced from llmdb — no manual config needed.
@@ -240,8 +255,17 @@ docker build -t llmgateway .
 
 docker run -p 4000:4000 \
   -v ./config:/config \
-  -e OPENROUTER_API_KEY=sk-... \
-  -e ANTHROPIC_API_KEY=sk-... \
+  --env-file .env \
+  llmgateway
+```
+
+Create a `.env` file with your API keys (referenced by `$VAR` in config.yaml):
+
+```
+OPENROUTER_API_KEY=sk-or-...
+ANTHROPIC_API_KEY=sk-ant-...
+LLMGATEWAY_DEV_KEY=my-dev-key
+```
   llmgateway
 ```
 

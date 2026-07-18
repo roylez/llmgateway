@@ -205,7 +205,12 @@ defmodule Llmgateway.Convert.InboundAnthropic do
   end
 
   defp convert_messages(messages) do
-    Enum.map(messages, &convert_message/1)
+    Enum.flat_map(messages, fn msg ->
+      case convert_message(msg) do
+        list when is_list(list) -> list
+        single -> [single]
+      end
+    end)
   end
 
   defp convert_message(%{"role" => "user", "content" => content}) when is_binary(content) do

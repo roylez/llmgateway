@@ -315,6 +315,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
   defp save_access_token(state) do
     path = Path.join(state.token_dir, "access-token")
     File.write(path, state.access_token || "")
+    File.chmod(path, 0o600)
   end
 
   defp save_api_key(state) do
@@ -327,5 +328,6 @@ defmodule Llmgateway.Auth.GitHubDevice do
       })
 
     File.write(path, data)
+    File.chmod(path, 0o600)
   end
 end

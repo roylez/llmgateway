@@ -7,3 +7,6 @@ test/
 .formatter.exs
 .tool-versions
 docs/
+config/
+.serena/
+.expert/

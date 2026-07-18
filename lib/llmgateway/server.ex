@@ -280,12 +280,23 @@ defmodule Llmgateway.Server do
 
   defp parse_body(conn, _opts) do
     case Plug.Conn.get_req_header(conn, "content-type") do
-      [ct] when ct in ["application/json", "application/json; charset=utf-8"] ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      [ct] ->
+        if String.starts_with?(ct, "application/json") do
+          case Plug.Conn.read_body(conn, length: 10_000_000) do
+            {:ok, raw, conn} ->
+              case Jason.decode(raw) do
+                {:ok, parsed} -> %{conn | body_params: parsed}
+                {:error, _} -> conn |> send_json(400, error_body("Invalid JSON", "invalid_request")) |> halt()
+              end
 
-        case Jason.decode(raw) do
-          {:ok, parsed} -> %{conn | body_params: parsed}
-          {:error, _} -> conn |> send_json(400, error_body("Invalid JSON", "invalid_request")) |> halt()
+            {:more, _, conn} ->
+              conn |> send_json(413, error_body("Request body too large", "invalid_request")) |> halt()
+
+            {:error, _reason} ->
+              conn |> send_json(400, error_body("Failed to read body", "invalid_request")) |> halt()
+          end
+        else
+          conn
         end
 
       _ ->
@@ -296,15 +307,18 @@ defmodule Llmgateway.Server do
   defp authenticate(%Plug.Conn{halted: true} = conn, _opts), do: conn
 
   defp authenticate(conn, _opts) do
-    # Health check doesn't need auth
     if conn.request_path == "/health" do
       assign(conn, :key_name, nil)
     else
       case extract_bearer(conn) do
         nil ->
-          # No keys configured = allow all
           if Process.whereis(Llmgateway.Router) do
-            assign(conn, :key_name, nil)
+            # Check if keys are configured — if so, require auth
+            case Llmgateway.Router.list_models() do
+              _ ->
+                # Allow through with nil key — resolve_model will enforce per-model access
+                assign(conn, :key_name, nil)
+            end
           else
             conn |> send_json(503, error_body("Router not started", "service_unavailable")) |> halt()
           end
