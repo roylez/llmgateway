@@ -16,6 +16,7 @@ RUN mix deps.get --only prod
 RUN mix deps.compile
 
 COPY lib lib
+COPY config config
 RUN mix release
 
 # ==============================================

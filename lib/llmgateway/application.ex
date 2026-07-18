@@ -6,9 +6,7 @@ defmodule Llmgateway.Application do
 
   @impl true
   def start(_type, _args) do
-    config_path =
-      System.get_env("LLMGATEWAY_CONFIG_PATH") ||
-        Application.get_env(:llmgateway, :config_path, "config/config.yaml")
+    config_path = Application.get_env(:llmgateway, :config_path, ".config/config.yaml")
 
     children =
       if File.exists?(config_path) do

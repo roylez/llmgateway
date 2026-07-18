@@ -1,6 +1,6 @@
 # Example configuration for LLM Gateway
 #
-# Copy to config/config.yaml and adjust to your setup.
+# Copy to .config/config.yaml and adjust to your setup.
 # Environment variables referenced with $VAR are resolved at boot.
 
 server:

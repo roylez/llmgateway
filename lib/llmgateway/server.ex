@@ -13,7 +13,6 @@ defmodule Llmgateway.Server do
 
   require Logger
 
-  plug :log_request
   plug :parse_body
   plug :authenticate
   plug :match
@@ -71,7 +70,7 @@ defmodule Llmgateway.Server do
     body = conn.body_params
     model_name = body["model"]
     key_name = conn.assigns[:key_name]
-    Logger.debug("chat/completions: model=#{model_name} key=#{key_name} stream=#{body["stream"]}")
+
 
     if body["stream"] do
       handle_stream(conn, model_name, body, key_name)
@@ -84,7 +83,7 @@ defmodule Llmgateway.Server do
     body = conn.body_params
     model_name = body["model"]
     key_name = conn.assigns[:key_name]
-    Logger.debug("messages: model=#{model_name} key=#{key_name} stream=#{body["stream"]} body_keys=#{inspect(Map.keys(body || %{}))}")
+
 
     canonical_body = Llmgateway.Convert.InboundAnthropic.to_canonical(body)
 
@@ -318,16 +317,6 @@ defmodule Llmgateway.Server do
 
   # ── Plugs ─────────────────────────────────────────────────
 
-  defp log_request(conn, _opts) do
-    ct = Plug.Conn.get_req_header(conn, "content-type") |> List.first()
-    auth = cond do
-      Plug.Conn.get_req_header(conn, "authorization") != [] -> "bearer"
-      Plug.Conn.get_req_header(conn, "x-api-key") != [] -> "x-api-key"
-      true -> "none"
-    end
-    Logger.debug("→ #{conn.method} #{conn.request_path} content-type=#{ct || "none"} auth=#{auth}")
-    conn
-  end
 
   defp parse_body(conn, _opts) do
     case Plug.Conn.get_req_header(conn, "content-type") do

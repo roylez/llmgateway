@@ -22,8 +22,8 @@ git clone <repo-url> && cd llmgateway
 mix deps.get
 
 # Create your config
-cp config.example.yaml config/config.yaml
-# Edit config/config.yaml with your providers and API keys
+cp config.example.yaml .config/config.yaml
+# Edit .config/config.yaml with your providers and API keys
 
 # Run
 mix run --no-halt
@@ -241,9 +241,9 @@ Tokens are cached to disk and auto-refresh. The storage location is resolved in 
 
 ```bash
 # Create config directory and config file
-mkdir -p config
-cp config.example.yaml config/config.yaml
-# Edit config/config.yaml with your providers and API keys
+mkdir -p .config
+cp config.example.yaml .config/config.yaml
+# Edit .config/config.yaml with your providers and API keys
 
 docker compose up -d
 ```
@@ -254,7 +254,7 @@ docker compose up -d
 docker build -t llmgateway .
 
 docker run -p 4000:4000 \
-  -v ./config:/config \
+  -v ./.config:/config \
   --env-file .env \
   llmgateway
 ```
@@ -269,7 +269,7 @@ LLMGATEWAY_DEV_KEY=my-dev-key
 
 ### File permissions
 
-The container runs as UID/GID 1000 by default. If your `config/` directory has different ownership, set `PUID`/`PGID` to match:
+The container runs as UID/GID 1000 by default. If your `.config/` directory has different ownership, set `PUID`/`PGID` to match:
 
 ```bash
 # docker-compose — set in .env or shell
@@ -282,9 +282,9 @@ docker build --build-arg PUID=$(id -u) --build-arg PGID=$(id -g) -t llmgateway .
 The container uses `/config` for both configuration and persistent data. One mount holds everything:
 
 ```
-config/
+.config/
   config.yaml              # proxy configuration
-  github_copilot/           # cached Copilot tokens (created automatically)
+  github_copilot_*/         # cached Copilot tokens (created automatically)
 ```
 
 ## Library Mode
@@ -293,7 +293,7 @@ Use directly in Elixir without the HTTP server — omit `server.port` from confi
 
 ```elixir
 # In your application
-{:ok, config} = Llmgateway.Config.load("config/config.yaml")
+{:ok, config} = Llmgateway.Config.load(".config/config.yaml")
 {:ok, _} = Llmgateway.Router.start_link(config)
 
 # Generate text
@@ -321,5 +321,5 @@ models = Llmgateway.list_models(key: "dev")
 Reload the config without restarting:
 
 ```elixir
-Llmgateway.Router.reload("config/config.yaml")
+Llmgateway.Router.reload(".config/config.yaml")
 ```
