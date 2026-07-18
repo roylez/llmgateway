@@ -26,16 +26,20 @@ defmodule Llmgateway.Provider do
       |> Map.put("model", deployment.upstream_model)
       |> Map.delete("_llmgateway")
 
-    req =
-      Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
-      |> Auth.add_headers(deployment)
-
-    url = Auth.request_path(deployment)
+    base_req = Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
 
     result =
-      req
-      |> Req.post(url: url, json: provider_body)
-      |> handle_response(deployment, warnings)
+      case Auth.add_headers(base_req, deployment) do
+        {:ok, req} ->
+          url = Auth.request_path(deployment)
+
+          req
+          |> Req.post(url: url, json: provider_body)
+          |> handle_response(deployment, warnings)
+
+        {:error, reason} ->
+          {:error, %{type: :client_error, status: 401, message: "Auth failed: #{inspect(reason)}", deployment: deployment.name}}
+      end
 
     case result do
       {:ok, _} -> Telemetry.request_stop(tel, 200)

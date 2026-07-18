@@ -8,39 +8,43 @@ defmodule Llmgateway.Auth do
 
   alias Llmgateway.Deployment
 
-  @doc "Add auth headers to a Req request based on deployment provider type."
+  @doc """
+  Add auth headers to a Req request based on deployment provider type.
+
+  Returns `{:ok, req}` or `{:error, reason}`.
+  """
   def add_headers(req, %Deployment{provider_type: :github_copilot} = d) do
     server_name = :"github_device_#{d.provider_name}"
 
     case Process.whereis(server_name) do
       nil ->
-        Logger.warning("#{d.name}: no GitHub auth server running")
-        req
+        {:error, :no_auth_server}
 
       _pid ->
         case Llmgateway.Auth.GitHubDevice.get_token(server_name) do
           {:ok, token} ->
-            req
-            |> Req.Request.put_header("authorization", "Bearer #{token}")
-            |> Req.Request.put_header("copilot-integration-id", "vscode-chat")
+            {:ok,
+             req
+             |> Req.Request.put_header("authorization", "Bearer #{token}")
+             |> Req.Request.put_header("copilot-integration-id", "vscode-chat")}
 
           {:error, reason} ->
-            Logger.warning("#{d.name}: GitHub auth failed: #{inspect(reason)}")
-            req
+            {:error, reason}
         end
     end
   end
 
-  def add_headers(req, %Deployment{api_key: nil}), do: req
+  def add_headers(req, %Deployment{api_key: nil}), do: {:ok, req}
 
   def add_headers(req, %Deployment{provider_type: :anthropic, api_key: key}) do
-    req
-    |> Req.Request.put_header("x-api-key", key)
-    |> Req.Request.put_header("anthropic-version", "2023-06-01")
+    {:ok,
+     req
+     |> Req.Request.put_header("x-api-key", key)
+     |> Req.Request.put_header("anthropic-version", "2023-06-01")}
   end
 
   def add_headers(req, %Deployment{api_key: key}) do
-    Req.Request.put_header(req, "authorization", "Bearer #{key}")
+    {:ok, Req.Request.put_header(req, "authorization", "Bearer #{key}")}
   end
 
   @doc "Return the chat completions endpoint path for a deployment."

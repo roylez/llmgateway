@@ -29,33 +29,32 @@ defmodule Llmgateway.Stream do
       |> Map.put("stream", true)
       |> Map.delete("_llmgateway")
 
-    req =
-      Req.new(
-        base_url: deployment.base_url,
-        receive_timeout: timeout,
-        retry: false
-      )
-      |> Auth.add_headers(deployment)
+    base_req = Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
 
-    url = Auth.request_path(deployment)
+    case Auth.add_headers(base_req, deployment) do
+      {:ok, req} ->
+        url = Auth.request_path(deployment)
 
-    case Req.post(req, url: url, json: provider_body, into: :self) do
-      {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
-        stream =
-          resp.body
-          |> to_sse_stream(resp)
-          |> Stream.transform("", &buffer_sse_lines/2)
-          |> Stream.flat_map(&decode_and_convert(&1, deployment))
+        case Req.post(req, url: url, json: provider_body, into: :self) do
+          {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
+            stream =
+              resp.body
+              |> to_sse_stream(resp)
+              |> Stream.transform("", &buffer_sse_lines/2)
+              |> Stream.flat_map(&decode_and_convert(&1, deployment))
 
-        {:ok, stream}
+            {:ok, stream}
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        # Non-streaming error — read the body
-        error_body = drain_body(body)
-        {:error, classify_error(status, error_body, deployment)}
+          {:ok, %Req.Response{status: status, body: body}} ->
+            error_body = drain_body(body)
+            {:error, classify_error(status, error_body, deployment)}
+
+          {:error, reason} ->
+            {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
+        end
 
       {:error, reason} ->
-        {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
+        {:error, %{type: :client_error, message: "Auth failed: #{inspect(reason)}", deployment: deployment.name}}
     end
   end
 

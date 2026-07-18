@@ -13,7 +13,7 @@ defmodule Llmgateway.Server do
 
   require Logger
 
-  plug Plug.Logger, log: :debug
+  plug :log_request
   plug :parse_body
   plug :authenticate
   plug :match
@@ -71,6 +71,7 @@ defmodule Llmgateway.Server do
     body = conn.body_params
     model_name = body["model"]
     key_name = conn.assigns[:key_name]
+    Logger.debug("chat/completions: model=#{model_name} key=#{key_name} stream=#{body["stream"]}")
 
     if body["stream"] do
       handle_stream(conn, model_name, body, key_name)
@@ -83,8 +84,8 @@ defmodule Llmgateway.Server do
     body = conn.body_params
     model_name = body["model"]
     key_name = conn.assigns[:key_name]
+    Logger.debug("messages: model=#{model_name} key=#{key_name} stream=#{body["stream"]} body_keys=#{inspect(Map.keys(body || %{}))}")
 
-    # Convert inbound Anthropic → canonical OpenAI
     canonical_body = Llmgateway.Convert.InboundAnthropic.to_canonical(body)
 
     if body["stream"] do
@@ -95,6 +96,7 @@ defmodule Llmgateway.Server do
   end
 
   match _ do
+    Logger.warning("404 unmatched route: #{conn.method} #{conn.request_path}")
     send_json(conn, 404, error_body("Not found", "not_found"))
   end
 
@@ -179,20 +181,54 @@ defmodule Llmgateway.Server do
 
   defp resolve_and_stream(model_name, body, key_name) do
     case Llmgateway.Router.resolve_model(model_name, key: key_name) do
-      {:ok, deployment, _fallbacks} ->
-        case Llmgateway.Stream.call(deployment, body) do
-          {:ok, stream} -> {:ok, stream, deployment}
-          {:error, reason} -> {:error, reason}
-        end
+      {:ok, deployment, fallbacks} ->
+        try_stream_with_fallbacks(deployment, fallbacks, body, key_name)
 
       {:error, :not_found} ->
         {:error, %{type: :not_found}}
 
+      {:error, :forbidden, fallbacks} ->
+        try_stream_fallback_list(fallbacks, body, key_name)
+
       {:error, :forbidden} ->
         {:error, %{type: :forbidden}}
+    end
+  end
 
-      {:error, :forbidden, _} ->
-        {:error, %{type: :forbidden}}
+  defp try_stream_with_fallbacks(deployment, fallbacks, body, key_name) do
+    case Llmgateway.Stream.call(deployment, body) do
+      {:ok, stream} -> {:ok, stream, deployment}
+      {:error, _reason} when fallbacks != [] ->
+        Logger.warning("Stream #{deployment.name} failed, trying fallbacks: #{inspect(fallbacks)}")
+        try_stream_fallback_list(fallbacks, body, key_name)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp try_stream_fallback_list([], _body, _key_name) do
+    {:error, %{type: :all_failed, message: "All stream fallbacks failed"}}
+  end
+
+  defp try_stream_fallback_list([fb_name | rest], body, key_name) do
+    case Llmgateway.Router.resolve_model(fb_name, key: key_name) do
+      {:ok, deployment, more_fallbacks} ->
+        remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
+        Logger.debug("Stream trying #{fb_name}, remaining chain: #{inspect(remaining)}")
+        case Llmgateway.Stream.call(deployment, body) do
+          {:ok, stream} -> {:ok, stream, deployment}
+          {:error, reason} ->
+            Logger.warning("Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}")
+            try_stream_fallback_list(remaining, body, key_name)
+        end
+
+      {:error, :forbidden, more_fallbacks} ->
+        remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
+        Logger.warning("Stream fallback #{fb_name} forbidden, remaining: #{inspect(remaining)}")
+        try_stream_fallback_list(remaining, body, key_name)
+
+      {:error, reason} ->
+        Logger.warning("Stream fallback #{fb_name} resolve failed: #{inspect(reason)}")
+        try_stream_fallback_list(rest, body, key_name)
     end
   end
 
@@ -281,6 +317,17 @@ defmodule Llmgateway.Server do
   end
 
   # ── Plugs ─────────────────────────────────────────────────
+
+  defp log_request(conn, _opts) do
+    ct = Plug.Conn.get_req_header(conn, "content-type") |> List.first()
+    auth = cond do
+      Plug.Conn.get_req_header(conn, "authorization") != [] -> "bearer"
+      Plug.Conn.get_req_header(conn, "x-api-key") != [] -> "x-api-key"
+      true -> "none"
+    end
+    Logger.debug("→ #{conn.method} #{conn.request_path} content-type=#{ct || "none"} auth=#{auth}")
+    conn
+  end
 
   defp parse_body(conn, _opts) do
     case Plug.Conn.get_req_header(conn, "content-type") do

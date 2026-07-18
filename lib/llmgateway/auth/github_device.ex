@@ -121,7 +121,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
   end
 
   @impl true
-  def handle_call(:get_token, from, state) do
+  def handle_call(:get_token, _from, state) do
     case get_valid_api_key(state) do
       {:ok, api_key, new_state} ->
         {:reply, {:ok, api_key}, new_state}
@@ -131,13 +131,12 @@ defmodule Llmgateway.Auth.GitHubDevice do
           {:ok, api_key, refreshed_state} ->
             {:reply, {:ok, api_key}, refreshed_state}
 
-          {:error, reason} ->
-            Logger.warning("[#{state.provider_name}] API key refresh failed: #{inspect(reason)}, starting device flow")
-            start_device_flow(from, %{new_state | access_token: nil, status: :idle})
+          {:error, _reason} ->
+            {:reply, {:error, :auth_required}, %{new_state | access_token: nil, status: :idle}}
         end
 
-      {:needs_login, new_state} ->
-        start_device_flow(from, new_state)
+      {:needs_login, _new_state} ->
+        {:reply, {:error, :auth_required}, state}
     end
   end
 
