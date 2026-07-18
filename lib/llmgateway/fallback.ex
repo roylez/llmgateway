@@ -45,7 +45,9 @@ defmodule Llmgateway.Fallback do
     key = opts[:key]
 
     case Router.resolve_model(fb_name, key: key) do
-      {:ok, fb_deployment, _fb_fallbacks} ->
+      {:ok, fb_deployment, fb_fallbacks} ->
+        # Chain: if this fallback fails, try its own fallbacks too
+        remaining = Enum.uniq(rest ++ fb_fallbacks) -- [original | Enum.map(errors, &elem(&1, 0))]
         case Provider.call(fb_deployment, body, opts) do
           {:ok, response} ->
             depth = length(errors)
@@ -60,7 +62,7 @@ defmodule Llmgateway.Fallback do
 
           {:error, reason} when is_map(reason) ->
             if Provider.retryable?(reason) do
-              try_fallbacks(rest, body, opts, original, [{fb_name, reason} | errors])
+              try_fallbacks(remaining, body, opts, original, [{fb_name, reason} | errors])
             else
               {:error, reason}
             end
