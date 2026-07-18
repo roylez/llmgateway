@@ -74,6 +74,11 @@ defmodule Llmgateway.Auth.GitHubDevice do
     GenServer.call(server, {:get_model_endpoint, model_id}, 5_000)
   end
 
+  @doc "List known model IDs from Copilot /models cache. Returns [] if not fetched yet."
+  def list_known_models(server \\ __MODULE__) do
+    GenServer.call(server, :list_known_models, 5_000)
+  end
+
   # ── Server callbacks ──────────────────────────────────────
 
   @impl true
@@ -171,6 +176,12 @@ defmodule Llmgateway.Auth.GitHubDevice do
       end
 
     {:reply, endpoint, state}
+  end
+
+  @impl true
+  def handle_call(:list_known_models, _from, state) do
+    known = state.model_endpoints |> Map.keys() |> Enum.sort()
+    {:reply, known, state}
   end
 
   @impl true

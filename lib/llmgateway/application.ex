@@ -15,6 +15,13 @@ defmodule Llmgateway.Application do
             auth_servers = github_device_servers(config)
             router = [{Llmgateway.Router, config}]
             server = maybe_start_server(config)
+
+            # Validate copilot model IDs after /models list is fetched
+            Task.start(fn ->
+              Process.sleep(5_000)
+              validate_copilot_models(config)
+            end)
+
             auth_servers ++ router ++ server
 
           {:error, reason} ->
@@ -55,5 +62,41 @@ defmodule Llmgateway.Application do
         id: name
       )
     end)
+  end
+  defp validate_copilot_models(config) do
+    copilot_providers = Enum.filter(config["providers"], &(&1.type == :github_copilot))
+
+    for provider <- copilot_providers do
+      server_name = :"github_device_#{provider.name}"
+
+      if Process.whereis(server_name) do
+        known = Llmgateway.Auth.GitHubDevice.list_known_models(server_name)
+
+        if known != [] do
+          for model <- config["models"], model.provider_name == provider.name do
+            unless model.upstream_model in known do
+              suggestion = suggest_similar(model.upstream_model, known)
+              hint = if suggestion, do: " Did you mean '#{suggestion}'?", else: ""
+
+              Logger.warning(
+                "[config] Model '#{model.name}' uses upstream '#{model.upstream_model}' " <>
+                  "which is not available on GitHub Copilot.#{hint}"
+              )
+            end
+          end
+        end
+      end
+    end
+  end
+
+  defp suggest_similar(target, candidates) do
+    target_lower = String.downcase(target)
+
+    candidates
+    |> Enum.filter(fn c ->
+      c_lower = String.downcase(c)
+      String.contains?(c_lower, target_lower) or String.contains?(target_lower, c_lower)
+    end)
+    |> List.first()
   end
 end

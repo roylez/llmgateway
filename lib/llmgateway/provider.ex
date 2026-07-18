@@ -7,7 +7,7 @@ defmodule Llmgateway.Provider do
 
   require Logger
 
-  alias Llmgateway.{Auth, Convert, Deployment, Telemetry}
+  alias Llmgateway.{Auth, Convert, Convert.ResponsesAPI, Deployment, Telemetry}
 
   # ── Public API ────────────────────────────────────────────
 
@@ -33,9 +33,17 @@ defmodule Llmgateway.Provider do
         {:ok, req} ->
           url = Auth.request_path(deployment)
 
+          # Convert to Responses API format if endpoint is /responses
+          {request_body, is_responses} =
+            if url == "/responses" do
+              {ResponsesAPI.to_responses(provider_body), true}
+            else
+              {provider_body, false}
+            end
+
           req
-          |> Req.post(url: url, json: provider_body)
-          |> handle_response(deployment, warnings)
+          |> Req.post(url: url, json: request_body)
+          |> handle_response(deployment, warnings, is_responses)
 
         {:error, reason} ->
           {:error, %{type: :client_error, status: 401, message: "Auth failed: #{inspect(reason)}", deployment: deployment.name}}
@@ -58,32 +66,37 @@ defmodule Llmgateway.Provider do
 
   # ── Response handling (pattern match on status) ───────────
 
-  defp handle_response({:ok, %{status: status, body: body}}, deployment, warnings) when status in 200..299 do
-    canonical = Convert.to_canonical(deployment, body)
+  defp handle_response({:ok, %{status: status, body: body}}, deployment, warnings, is_responses) when status in 200..299 do
+    canonical =
+      if is_responses do
+        ResponsesAPI.from_responses(body)
+      else
+        Convert.to_canonical(deployment, body)
+      end
+
     {:ok, attach_metadata(canonical, deployment, warnings)}
   end
 
-  defp handle_response({:ok, %{status: 429, body: body}}, deployment, _warnings) do
+  defp handle_response({:ok, %{status: 429, body: body}}, deployment, _warnings, _is_responses) do
     Logger.warning("#{deployment.name}: rate limited")
     {:error, %{type: :rate_limit, status: 429, message: error_message(body), deployment: deployment.name}}
   end
 
-  defp handle_response({:ok, %{status: status, body: body}}, deployment, _warnings) when status >= 500 do
+  defp handle_response({:ok, %{status: status, body: body}}, deployment, _warnings, _is_responses) when status >= 500 do
     Logger.warning("#{deployment.name}: server error #{status}")
     {:error, %{type: :server_error, status: status, message: error_message(body), deployment: deployment.name}}
   end
 
-  defp handle_response({:ok, %{status: status, body: body}}, deployment, _warnings) do
+  defp handle_response({:ok, %{status: status, body: body}}, deployment, _warnings, _is_responses) do
     Logger.warning("#{deployment.name}: client error #{status}")
     {:error, %{type: :client_error, status: status, message: error_message(body), deployment: deployment.name}}
   end
 
-  defp handle_response({:error, %Req.TransportError{reason: reason}}, deployment, _warnings) do
+  defp handle_response({:error, %Req.TransportError{reason: reason}}, deployment, _warnings, _is_responses) do
     Logger.warning("#{deployment.name}: transport error #{inspect(reason)}")
     {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
   end
-
-  defp handle_response({:error, reason}, deployment, _warnings) do
+  defp handle_response({:error, reason}, deployment, _warnings, _is_responses) do
     Logger.warning("#{deployment.name}: #{inspect(reason)}")
     {:error, %{type: :unknown_error, reason: reason, deployment: deployment.name}}
   end

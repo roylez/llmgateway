@@ -8,7 +8,7 @@ defmodule Llmgateway.Stream do
 
   require Logger
 
-  alias Llmgateway.{Auth, Convert, Deployment}
+  alias Llmgateway.{Auth, Convert, Convert.ResponsesAPI, Deployment}
 
   @doc """
   Execute a streaming request and return an enumerable of OpenAI-format SSE chunks.
@@ -34,14 +34,22 @@ defmodule Llmgateway.Stream do
     case Auth.add_headers(base_req, deployment) do
       {:ok, req} ->
         url = Auth.request_path(deployment)
+        is_responses = (url == "/responses")
 
-        case Req.post(req, url: url, json: provider_body, into: :self) do
+        request_body =
+          if is_responses do
+            ResponsesAPI.to_responses(provider_body)
+          else
+            provider_body
+          end
+
+        case Req.post(req, url: url, json: request_body, into: :self) do
           {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
             stream =
               resp.body
               |> to_sse_stream(resp)
               |> Stream.transform("", &buffer_sse_lines/2)
-              |> Stream.flat_map(&decode_and_convert(&1, deployment))
+              |> Stream.flat_map(&decode_and_convert(&1, deployment, is_responses))
 
             {:ok, stream}
 
@@ -95,14 +103,22 @@ defmodule Llmgateway.Stream do
     {data_lines, remainder}
   end
 
-  defp decode_and_convert("[DONE]", _deployment), do: [:done]
+  defp decode_and_convert("[DONE]", _deployment, _is_responses), do: [:done]
 
-  defp decode_and_convert(data, deployment) when is_binary(data) do
+  defp decode_and_convert(data, deployment, is_responses) when is_binary(data) do
     case Jason.decode(data) do
       {:ok, event} ->
-        case Convert.stream_event_to_canonical(deployment, event) do
+        result =
+          if is_responses do
+            ResponsesAPI.stream_event_to_chunk(event)
+          else
+            Convert.stream_event_to_canonical(deployment, event)
+          end
+
+        case result do
           {:ok, chunk} -> [chunk]
           :skip -> []
+          :done -> [:done]
         end
 
       {:error, _} ->
