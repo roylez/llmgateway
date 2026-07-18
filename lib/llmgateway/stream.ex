@@ -8,7 +8,7 @@ defmodule Llmgateway.Stream do
 
   require Logger
 
-  alias Llmgateway.{Convert, Deployment}
+  alias Llmgateway.{Auth, Convert, Deployment}
 
   @doc """
   Execute a streaming request and return an enumerable of OpenAI-format SSE chunks.
@@ -35,9 +35,9 @@ defmodule Llmgateway.Stream do
         receive_timeout: timeout,
         retry: false
       )
-      |> add_auth(deployment)
+      |> Auth.add_headers(deployment)
 
-    url = request_path(deployment)
+    url = Auth.request_path(deployment)
 
     case Req.post(req, url: url, json: provider_body, into: :self) do
       {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
@@ -112,22 +112,6 @@ defmodule Llmgateway.Stream do
     end
   end
 
-  # ── Auth (duplicated from Provider for now — will extract later) ──
-
-  defp add_auth(req, %Deployment{api_key: nil}), do: req
-
-  defp add_auth(req, %Deployment{provider_type: :anthropic, api_key: key}) do
-    req
-    |> Req.Request.put_header("x-api-key", key)
-    |> Req.Request.put_header("anthropic-version", "2023-06-01")
-  end
-
-  defp add_auth(req, %Deployment{api_key: key}) do
-    Req.Request.put_header(req, "authorization", "Bearer #{key}")
-  end
-
-  defp request_path(%Deployment{provider_type: :anthropic}), do: "/v1/messages"
-  defp request_path(%Deployment{}), do: "/chat/completions"
 
   # ── Error helpers ─────────────────────────────────────────
 

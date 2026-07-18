@@ -41,6 +41,6 @@ defmodule Llmgateway.Convert do
   end
 
   def stream_event_to_canonical(%Deployment{}, event) do
-    event
+    {:ok, event}
   end
 end

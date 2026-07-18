@@ -7,7 +7,7 @@ defmodule Llmgateway.Provider do
 
   require Logger
 
-  alias Llmgateway.{Convert, Deployment, Telemetry}
+  alias Llmgateway.{Auth, Convert, Deployment, Telemetry}
 
   # ── Public API ────────────────────────────────────────────
 
@@ -28,9 +28,9 @@ defmodule Llmgateway.Provider do
 
     req =
       Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
-      |> add_auth(deployment)
+      |> Auth.add_headers(deployment)
 
-    url = request_path(deployment)
+    url = Auth.request_path(deployment)
 
     result =
       req
@@ -81,46 +81,6 @@ defmodule Llmgateway.Provider do
     {:error, %{type: :unknown_error, reason: reason, deployment: deployment.name}}
   end
 
-  # ── Auth (pattern match on provider type) ─────────────────
-
-  defp add_auth(req, %Deployment{provider_type: :github_copilot} = d) do
-    server_name = :"github_device_#{d.provider_name}"
-
-    case Process.whereis(server_name) do
-      nil ->
-        Logger.warning("#{d.name}: no GitHub auth server running")
-        req
-
-      _pid ->
-        case Llmgateway.Auth.GitHubDevice.get_token(server_name) do
-          {:ok, token} ->
-            req
-            |> Req.Request.put_header("authorization", "Bearer #{token}")
-            |> Req.Request.put_header("copilot-integration-id", "vscode-chat")
-
-          {:error, reason} ->
-            Logger.warning("#{d.name}: GitHub auth failed: #{inspect(reason)}")
-            req
-        end
-    end
-  end
-
-  defp add_auth(req, %Deployment{api_key: nil}), do: req
-
-  defp add_auth(req, %Deployment{provider_type: :anthropic, api_key: key}) do
-    req
-    |> Req.Request.put_header("x-api-key", key)
-    |> Req.Request.put_header("anthropic-version", "2023-06-01")
-  end
-
-  defp add_auth(req, %Deployment{api_key: key}) do
-    Req.Request.put_header(req, "authorization", "Bearer #{key}")
-  end
-
-  # ── Request path (pattern match on provider type) ─────────
-
-  defp request_path(%Deployment{provider_type: :anthropic}), do: "/v1/messages"
-  defp request_path(%Deployment{}), do: "/chat/completions"
 
   # ── Helpers ───────────────────────────────────────────────
 

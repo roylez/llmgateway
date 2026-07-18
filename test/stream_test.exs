@@ -97,9 +97,8 @@ defmodule Llmgateway.StreamTest do
         "choices" => [%{"delta" => %{"content" => "Hi"}, "index" => 0}]
       }
 
-      # OpenAI events should pass through as-is
-      result = Llmgateway.Convert.stream_event_to_canonical(deployment, event)
-      assert result == event
+      # OpenAI events pass through wrapped in {:ok, _}
+      assert {:ok, ^event} = Llmgateway.Convert.stream_event_to_canonical(deployment, event)
     end
   end
 end
