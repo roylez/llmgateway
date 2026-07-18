@@ -116,19 +116,22 @@ defmodule Llmgateway.Auth.GitHubDevice do
   end
 
   @impl true
+  def handle_call(:get_token, _from, %{status: :pending} = state) do
+    {:reply, {:error, :auth_pending}, state}
+  end
+
+  @impl true
   def handle_call(:get_token, from, state) do
     case get_valid_api_key(state) do
       {:ok, api_key, new_state} ->
         {:reply, {:ok, api_key}, new_state}
 
       {:needs_refresh, new_state} ->
-        # Have access_token but API key expired — refresh
         case refresh_api_key(new_state) do
           {:ok, api_key, refreshed_state} ->
             {:reply, {:ok, api_key}, refreshed_state}
 
           {:error, reason} ->
-            # Access token might be invalid, need full re-auth
             Logger.warning("[#{state.provider_name}] API key refresh failed: #{inspect(reason)}, starting device flow")
             start_device_flow(from, %{new_state | access_token: nil, status: :idle})
         end

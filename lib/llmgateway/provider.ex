@@ -46,7 +46,10 @@ defmodule Llmgateway.Provider do
     result
   end
 
-  def retryable?(%{type: type}) when type in [:rate_limit, :server_error, :transport_error, :timeout], do: true
+  def retryable?(%{type: type})
+      when type in [:rate_limit, :server_error, :transport_error, :timeout, :client_error],
+      do: true
+
   def retryable?(_), do: false
 
   # ── Response handling (pattern match on status) ───────────

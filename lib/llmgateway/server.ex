@@ -119,17 +119,18 @@ defmodule Llmgateway.Server do
       {:error, %{type: :server_error} = err} ->
         send_json(conn, 502, error_body(err[:message] || "Upstream error", "upstream_error"))
 
-      {:error, %{type: :all_failed} = err} ->
-        send_json(conn, 502, error_body("All deployments failed", "upstream_error", err[:errors]))
+      {:error, %{type: :all_failed, errors: errors}} ->
+        messages = Enum.map(errors, fn {name, e} -> "#{name}: #{e[:message] || inspect(e)}" end)
+        send_json(conn, 502, error_body(Enum.join(messages, "; "), "upstream_error"))
 
-      {:error, %{type: :transport_error} = err} ->
-        send_json(conn, 502, error_body(err[:reason] |> inspect(), "upstream_error"))
+      {:error, %{type: :transport_error, reason: reason}} ->
+        send_json(conn, 502, error_body("Transport error: #{inspect(reason)}", "upstream_error"))
 
-      {:error, %{type: :unknown_error} = err} ->
-        send_json(conn, 502, error_body(inspect(err[:reason]), "upstream_error"))
+      {:error, %{message: msg}} ->
+        send_json(conn, 502, error_body(msg, "upstream_error"))
 
       {:error, err} ->
-        send_json(conn, 500, error_body(inspect(err), "internal_error"))
+        send_json(conn, 500, error_body(format_error(err), "internal_error"))
     end
   end
 
@@ -215,8 +216,11 @@ defmodule Llmgateway.Server do
       {:error, %{type: :rate_limit} = err} ->
         send_anthropic_error(conn, 429, "rate_limit_error", err[:message] || "Rate limited")
 
+      {:error, %{message: msg}} ->
+        send_anthropic_error(conn, 502, "api_error", msg)
+
       {:error, err} ->
-        send_anthropic_error(conn, 500, "api_error", inspect(err))
+        send_anthropic_error(conn, 500, "api_error", format_error(err))
     end
   end
 
@@ -373,4 +377,8 @@ defmodule Llmgateway.Server do
     error = if details, do: Map.put(error, "details", details), else: error
     %{"error" => error}
   end
+  defp format_error(%{message: msg}), do: msg
+  defp format_error(err) when is_binary(err), do: err
+  defp format_error(err), do: inspect(err)
+
 end
