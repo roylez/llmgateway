@@ -13,6 +13,7 @@ defmodule Llmgateway.Server do
 
   require Logger
 
+  plug Plug.Logger, log: :debug
   plug :parse_body
   plug :authenticate
   plug :match
