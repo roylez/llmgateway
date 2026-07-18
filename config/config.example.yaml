@@ -1,0 +1,116 @@
+# Example configuration for LLM Gateway
+#
+# Copy to config/config.yaml and adjust to your setup.
+# Environment variables referenced with $VAR are resolved at boot.
+
+server:
+  port: 4000
+
+# ── API Keys ────────────────────────────────────────────────
+# Virtual keys for authenticating clients to the proxy.
+# Models can be restricted to specific keys.
+# Omit this section entirely to allow unauthenticated access.
+
+keys:
+  - name: dev
+    value: $LLMGATEWAY_DEV_KEY
+  - name: prod
+    value: $LLMGATEWAY_PROD_KEY
+
+# ── Providers ───────────────────────────────────────────────
+# Each provider defines a connection to an upstream LLM service.
+# `type` maps to a provider in llmdb.xyz — base URLs and auth
+# styles are resolved automatically.
+#
+# The same provider type can appear multiple times with different
+# names and credentials.
+
+providers:
+  - name: openrouter
+    type: openrouter
+    api_key: $OPENROUTER_API_KEY
+
+  - name: openrouter-work
+    type: openrouter
+    api_key: $OPENROUTER_WORK_KEY
+
+  - name: openai
+    type: openai
+    api_key: $OPENAI_API_KEY
+
+  - name: anthropic
+    type: anthropic
+    api_key: $ANTHROPIC_API_KEY
+
+  - name: copilot
+    type: github_copilot
+    # No api_key needed — uses GitHub device code flow automatically.
+    # Tokens cached to ~/.config/llmgateway/github_copilot/
+
+  # Local Ollama (no auth required)
+  - name: ollama
+    type: ollama
+
+# ── Models ──────────────────────────────────────────────────
+# Each model defines a local alias that clients use.
+# `provider` references a named provider above.
+# `model` is the upstream model ID as the provider knows it.
+# `keys` restricts access — omit to allow all keys.
+#
+# Model metadata (context length, output limit, capabilities)
+# is sourced automatically from llmdb.xyz.
+
+models:
+  # OpenRouter models
+  - name: deepseek-v3
+    provider: openrouter
+    model: deepseek/deepseek-chat
+
+  - name: deepseek-v3-work
+    provider: openrouter-work
+    model: deepseek/deepseek-chat
+    keys: [prod]
+
+  # Direct provider models
+  - name: gpt-4o-mini
+    provider: openai
+    model: gpt-4o-mini
+
+  - name: gpt-4o
+    provider: openai
+    model: gpt-4o
+    keys: [prod]
+
+  - name: claude-sonnet
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+
+  - name: claude-haiku
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+
+  # GitHub Copilot
+  - name: copilot-gpt4o
+    provider: copilot
+    model: gpt-4o
+
+  - name: copilot-claude
+    provider: copilot
+    model: claude-sonnet-4
+
+  # Local Ollama
+  - name: llama-local
+    provider: ollama
+    model: llama3.2
+
+# ── Fallbacks ───────────────────────────────────────────────
+# When a model fails (5xx, timeout, rate limit), try the next
+# model in the list. Key access is checked per-attempt.
+
+fallbacks:
+  - deepseek-v3: [claude-haiku, gpt-4o-mini]
+  - gpt-4o: [claude-sonnet]
+  - claude-sonnet: [gpt-4o]
+
+  # Generic fallback for any model without specific fallbacks
+  - "*": [gpt-4o-mini]
