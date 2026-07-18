@@ -1,0 +1,32 @@
+server:
+  port: 4000
+
+keys:
+  - name: work-key
+    value: test-work-key-value
+  - name: personal-key
+    value: test-personal-key-value
+
+providers:
+  - name: openrouter
+    type: openrouter
+    api_key: test-openrouter-key
+
+  - name: openai-main
+    type: openai
+    api_key: test-openai-key
+
+models:
+  - name: deepseek-v4-flash
+    provider: openrouter
+    model: deepseek/deepseek-chat
+    keys:
+      - work-key
+
+  - name: gpt-4o-mini
+    provider: openai-main
+    model: gpt-4o-mini
+
+fallbacks:
+  - deepseek-v4-flash:
+      - gpt-4o-mini

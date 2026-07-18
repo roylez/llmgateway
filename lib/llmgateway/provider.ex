@@ -1,0 +1,102 @@
+defmodule Llmgateway.Provider do
+  @moduledoc """
+  Executes LLM API calls against a resolved deployment.
+
+  Uses pattern matching on provider type and response shape for dispatch.
+  """
+
+  require Logger
+
+  alias Llmgateway.Deployment
+
+  # ── Public API ────────────────────────────────────────────
+
+  @doc """
+  Call a deployment with a chat completions body (OpenAI format).
+  """
+  def call(%Deployment{} = deployment, body, opts \\ []) do
+    timeout = opts[:timeout] || 120_000
+
+    body =
+      body
+      |> Map.put("model", deployment.upstream_model)
+      |> Map.delete("_llmgateway")
+
+    req =
+      Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
+      |> add_auth(deployment)
+
+    url = request_path(deployment)
+
+    req
+    |> Req.post(url: url, json: body)
+    |> handle_response(deployment)
+  end
+
+  def retryable?(%{type: type}) when type in [:rate_limit, :server_error, :transport_error, :timeout], do: true
+  def retryable?(_), do: false
+
+  # ── Response handling (pattern match on status) ───────────
+
+  defp handle_response({:ok, %{status: status, body: body}}, deployment) when status in 200..299 do
+    {:ok, attach_metadata(body, deployment)}
+  end
+
+  defp handle_response({:ok, %{status: 429, body: body}}, deployment) do
+    Logger.warning("#{deployment.name}: rate limited")
+    {:error, %{type: :rate_limit, status: 429, message: error_message(body), deployment: deployment.name}}
+  end
+
+  defp handle_response({:ok, %{status: status, body: body}}, deployment) when status >= 500 do
+    Logger.warning("#{deployment.name}: server error #{status}")
+    {:error, %{type: :server_error, status: status, message: error_message(body), deployment: deployment.name}}
+  end
+
+  defp handle_response({:ok, %{status: status, body: body}}, deployment) do
+    Logger.warning("#{deployment.name}: client error #{status}")
+    {:error, %{type: :client_error, status: status, message: error_message(body), deployment: deployment.name}}
+  end
+
+  defp handle_response({:error, %Req.TransportError{reason: reason}}, deployment) do
+    Logger.warning("#{deployment.name}: transport error #{inspect(reason)}")
+    {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
+  end
+
+  defp handle_response({:error, reason}, deployment) do
+    Logger.warning("#{deployment.name}: #{inspect(reason)}")
+    {:error, %{type: :unknown_error, reason: reason, deployment: deployment.name}}
+  end
+
+  # ── Auth (pattern match on provider type) ─────────────────
+
+  defp add_auth(req, %Deployment{api_key: nil}), do: req
+
+  defp add_auth(req, %Deployment{provider_type: :anthropic, api_key: key}) do
+    req
+    |> Req.Request.put_header("x-api-key", key)
+    |> Req.Request.put_header("anthropic-version", "2023-06-01")
+  end
+
+  defp add_auth(req, %Deployment{api_key: key}) do
+    Req.Request.put_header(req, "authorization", "Bearer #{key}")
+  end
+
+  # ── Request path (pattern match on provider type) ─────────
+
+  defp request_path(%Deployment{provider_type: :anthropic}), do: "/v1/messages"
+  defp request_path(%Deployment{}), do: "/chat/completions"
+
+  # ── Helpers ───────────────────────────────────────────────
+
+  defp attach_metadata(body, deployment) do
+    Map.put_new(body, "_llmgateway", %{
+      "deployment" => deployment.name,
+      "provider" => Atom.to_string(deployment.provider_type)
+    })
+  end
+
+  defp error_message(%{"error" => %{"message" => msg}}), do: msg
+  defp error_message(%{"error" => msg}) when is_binary(msg), do: msg
+  defp error_message(body) when is_binary(body), do: body
+  defp error_message(body), do: inspect(body)
+end
