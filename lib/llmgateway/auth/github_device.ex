@@ -73,7 +73,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
         System.get_env("LLMGATEWAY_DATA_DIR") ||
         Path.join([System.user_home!(), ".config", "llmgateway"])
 
-    token_dir = Path.join(base_dir, "github_copilot")
+    token_dir = Path.join(base_dir, "github_copilot_#{provider_name}")
 
     case File.mkdir_p(token_dir) do
       :ok -> :ok
