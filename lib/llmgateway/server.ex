@@ -79,6 +79,21 @@ defmodule Llmgateway.Server do
     end
   end
 
+  post "/v1/messages" do
+    body = conn.body_params
+    model_name = body["model"]
+    key_name = conn.assigns[:key_name]
+
+    # Convert inbound Anthropic → canonical OpenAI
+    canonical_body = Llmgateway.Convert.InboundAnthropic.to_canonical(body)
+
+    if body["stream"] do
+      handle_anthropic_stream(conn, model_name, canonical_body, key_name)
+    else
+      handle_anthropic_completion(conn, model_name, canonical_body, key_name)
+    end
+  end
+
   match _ do
     send_json(conn, 404, error_body("Not found", "not_found"))
   end
@@ -180,6 +195,87 @@ defmodule Llmgateway.Server do
     end
   end
 
+  # ── Anthropic-format handlers ─────────────────────────────
+
+  defp handle_anthropic_completion(conn, model_name, canonical_body, key_name) do
+    case Llmgateway.generate_text(model_name, canonical_body, key: key_name) do
+      {:ok, response} ->
+        anthropic_response = Llmgateway.Convert.InboundAnthropic.from_canonical(response)
+
+        conn
+        |> put_context_header(model_name, key_name)
+        |> send_json(200, anthropic_response)
+
+      {:error, %{type: :not_found}} ->
+        send_anthropic_error(conn, 404, "not_found_error", "Model '#{model_name}' not found")
+
+      {:error, %{type: :forbidden}} ->
+        send_anthropic_error(conn, 403, "permission_error", "Access denied to '#{model_name}'")
+
+      {:error, %{type: :rate_limit} = err} ->
+        send_anthropic_error(conn, 429, "rate_limit_error", err[:message] || "Rate limited")
+
+      {:error, err} ->
+        send_anthropic_error(conn, 500, "api_error", inspect(err))
+    end
+  end
+
+  defp handle_anthropic_stream(conn, model_name, canonical_body, key_name) do
+    case resolve_and_stream(model_name, canonical_body, key_name) do
+      {:ok, stream, deployment} ->
+        conn =
+          conn
+          |> put_resp_content_type("text/event-stream")
+          |> put_resp_header("cache-control", "no-cache")
+          |> put_resp_header("connection", "keep-alive")
+          |> put_resp_header("x-context-length", to_string(deployment.context || 0))
+          |> send_chunked(200)
+
+        state = %{block_index: 0}
+
+        conn =
+          Enum.reduce_while(stream, conn, fn
+            :done, conn ->
+              {:halt, conn}
+
+            chunk, conn ->
+              case Llmgateway.Convert.InboundAnthropic.chunk_to_anthropic_events(chunk, state) do
+                {:ok, events} ->
+                  result =
+                    Enum.reduce_while(events, {:ok, conn}, fn event, {:ok, c} ->
+                      case chunk(c, "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n") do
+                        {:ok, c} -> {:cont, {:ok, c}}
+                        {:error, _} -> {:halt, {:error, c}}
+                      end
+                    end)
+
+                  case result do
+                    {:ok, conn} -> {:cont, conn}
+                    {:error, conn} -> {:halt, conn}
+                  end
+
+                :skip ->
+                  {:cont, conn}
+              end
+          end)
+
+        conn
+
+      {:error, %{type: :not_found}} ->
+        send_anthropic_error(conn, 404, "not_found_error", "Model '#{model_name}' not found")
+
+      {:error, err} ->
+        send_anthropic_error(conn, 500, "api_error", inspect(err))
+    end
+  end
+
+  defp send_anthropic_error(conn, status, type, message) do
+    send_json(conn, status, %{
+      "type" => "error",
+      "error" => %{"type" => type, "message" => message}
+    })
+  end
+
   # ── Plugs ─────────────────────────────────────────────────
 
   defp parse_body(conn, _opts) do
@@ -228,7 +324,12 @@ defmodule Llmgateway.Server do
   defp extract_bearer(conn) do
     case Plug.Conn.get_req_header(conn, "authorization") do
       ["Bearer " <> token] -> token
-      _ -> nil
+      _ ->
+        # Also check x-api-key header (Anthropic style)
+        case Plug.Conn.get_req_header(conn, "x-api-key") do
+          [key] -> key
+          _ -> nil
+        end
     end
   end
 
