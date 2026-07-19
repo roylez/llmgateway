@@ -23,6 +23,9 @@ defmodule Llmgateway.Server do
 
   require Logger
 
+  alias Llmgateway.Telemetry
+
+
   plug(Plug.Logger, log: :debug)
   plug(:parse_body)
   plug(:authenticate)
@@ -426,6 +429,8 @@ defmodule Llmgateway.Server do
   defp handle_stream(conn, model_name, body, key_name) do
     case resolve_and_stream(model_name, body, key_name) do
       {:ok, stream, deployment} ->
+        tel = Telemetry.request_start(deployment)
+
         conn =
           conn
           |> put_resp_content_type("text/event-stream")
@@ -435,17 +440,22 @@ defmodule Llmgateway.Server do
           |> put_resp_header("x-model-name", deployment.upstream_model)
           |> send_chunked(200)
 
-        conn =
-          Enum.reduce_while(stream, conn, fn
-            :done, conn ->
-              {:halt, conn}
+        {conn, last_usage} =
+          Enum.reduce_while(stream, {conn, nil}, fn
+            :done, {conn, usage} ->
+              {:halt, {conn, usage}}
 
-            chunk, conn ->
-              case chunk(conn, "data: #{Jason.encode!(chunk)}\n\n") do
-                {:ok, conn} -> {:cont, conn}
-                {:error, _} -> {:halt, conn}
+            data, {conn, prev_usage} ->
+              this_usage = data["usage"] || prev_usage
+              encoded = "data: #{Jason.encode!(data)}\n\n"
+
+              case chunk(conn, encoded) do
+                {:ok, conn} -> {:cont, {conn, this_usage}}
+                {:error, _} -> {:halt, {conn, this_usage}}
               end
           end)
+
+        Telemetry.request_stop(tel, 200, last_usage)
 
         case chunk(conn, "data: [DONE]\n\n") do
           {:ok, conn} -> conn
