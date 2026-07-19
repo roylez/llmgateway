@@ -8,7 +8,7 @@ defmodule Llmgateway.Stream do
 
   require Logger
 
-  alias Llmgateway.{Auth, Convert, Convert.ResponsesAPI, Deployment}
+  alias Llmgateway.{Auth, Convert, Convert.ResponsesAPI, Deployment, Telemetry}
 
   @doc """
   Execute a streaming request and return an enumerable of OpenAI-format SSE chunks.
@@ -20,6 +20,7 @@ defmodule Llmgateway.Stream do
   """
   def call(%Deployment{} = deployment, body, opts \\ []) do
     timeout = opts[:timeout] || 120_000
+    tel = Telemetry.request_start(deployment)
 
     {provider_body, _warnings} = Convert.to_provider(deployment, body)
 
@@ -31,44 +32,58 @@ defmodule Llmgateway.Stream do
 
     base_req = Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
 
-    case Auth.add_headers(base_req, deployment) do
-      {:ok, req} ->
-        url = Auth.request_path(deployment)
-        is_responses = url == "/responses"
+    result =
+      case Auth.add_headers(base_req, deployment) do
+        {:ok, req} ->
+          url = Auth.request_path(deployment)
+          is_responses = url == "/responses"
 
-        request_body =
-          if is_responses do
-            ResponsesAPI.to_responses(provider_body)
-          else
-            provider_body
+          request_body =
+            if is_responses do
+              ResponsesAPI.to_responses(provider_body)
+            else
+              provider_body
+            end
+
+          case Req.post(req, url: url, json: request_body, into: :self) do
+            {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
+              stream =
+                resp.body
+                |> to_sse_stream(resp)
+                |> Stream.transform("", &buffer_sse_lines/2)
+                |> Stream.flat_map(&decode_and_convert(&1, deployment, is_responses))
+
+              {:ok, stream}
+
+            {:ok, %Req.Response{status: status, body: body}} ->
+              error_body = drain_body(body)
+              {:error, classify_error(status, error_body, deployment)}
+
+            {:error, reason} ->
+              {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
           end
 
-        case Req.post(req, url: url, json: request_body, into: :self) do
-          {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
-            stream =
-              resp.body
-              |> to_sse_stream(resp)
-              |> Stream.transform("", &buffer_sse_lines/2)
-              |> Stream.flat_map(&decode_and_convert(&1, deployment, is_responses))
+        {:error, reason} ->
+          {:error,
+           %{
+             type: :client_error,
+             message: "Auth failed: #{inspect(reason)}",
+             deployment: deployment.name
+           }}
+      end
 
-            {:ok, stream}
+    case result do
+      {:ok, _stream} ->
+        Telemetry.request_stop(tel, 200)
 
-          {:ok, %Req.Response{status: status, body: body}} ->
-            error_body = drain_body(body)
-            {:error, classify_error(status, error_body, deployment)}
-
-          {:error, reason} ->
-            {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
-        end
+      {:error, %{type: _type, status: s}} ->
+        Telemetry.request_exception(tel, :error, %{status: s})
 
       {:error, reason} ->
-        {:error,
-         %{
-           type: :client_error,
-           message: "Auth failed: #{inspect(reason)}",
-           deployment: deployment.name
-         }}
+        Telemetry.request_exception(tel, :error, reason)
     end
+
+    result
   end
 
   # ── SSE parsing ───────────────────────────────────────────

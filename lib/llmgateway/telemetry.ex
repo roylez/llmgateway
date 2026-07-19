@@ -100,7 +100,7 @@ defmodule Llmgateway.Telemetry do
         [:llmgateway, :request, :exception],
         [:llmgateway, :fallback, :triggered]
       ],
-      &handle_event/4,
+      &__MODULE__.handle_event/4,
       nil
     )
   end
