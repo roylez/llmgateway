@@ -8,7 +8,7 @@ defmodule Llmgateway.Stream do
 
   require Logger
 
-  alias Llmgateway.{Auth, Convert, Convert.ResponsesAPI, Deployment, Telemetry}
+  alias Llmgateway.{Auth, Convert, Convert.ResponsesAPI, Deployment}
 
   @doc """
   Execute a streaming request and return an enumerable of OpenAI-format SSE chunks.
@@ -20,7 +20,7 @@ defmodule Llmgateway.Stream do
   """
   def call(%Deployment{} = deployment, body, opts \\ []) do
     timeout = opts[:timeout] || 120_000
-    tel = Telemetry.request_start(deployment)
+
 
     {provider_body, _warnings} = Convert.to_provider(deployment, body)
 
@@ -72,16 +72,6 @@ defmodule Llmgateway.Stream do
            }}
       end
 
-    case result do
-      {:ok, _stream} ->
-        Telemetry.request_stop(tel, 200)
-
-      {:error, %{type: _type, status: s}} ->
-        Telemetry.request_exception(tel, :error, %{status: s})
-
-      {:error, reason} ->
-        Telemetry.request_exception(tel, :error, reason)
-    end
 
     result
   end
