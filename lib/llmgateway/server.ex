@@ -403,8 +403,12 @@ defmodule Llmgateway.Server do
         send_json(conn, 502, error_body(err[:message] || "Upstream error", "upstream_error"))
 
       {:error, %{type: :all_failed, errors: errors}} ->
-        messages = Enum.map(errors, fn {name, e} -> "#{name}: #{e[:message] || inspect(e)}" end)
-        send_json(conn, 502, error_body(Enum.join(messages, "; "), "upstream_error"))
+        details =
+          Enum.map(errors, fn {name, e} ->
+            %{"model" => name, "status" => e[:status], "reason" => e[:message] || inspect(e)}
+          end)
+
+        send_json(conn, 502, error_body("All providers failed", "upstream_error", details))
 
       {:error, %{type: :transport_error, reason: reason}} ->
         send_json(conn, 502, error_body("Transport error: #{inspect(reason)}", "upstream_error"))
@@ -454,6 +458,14 @@ defmodule Llmgateway.Server do
       {:error, %{type: :forbidden}} ->
         send_json(conn, 403, error_body("Access denied to '#{model_name}'", "access_forbidden"))
 
+      {:error, %{type: :all_failed, errors: errors}} ->
+        details =
+          Enum.map(errors, fn {name, e} ->
+            %{"model" => name, "status" => e[:status], "reason" => e[:message] || inspect(e)}
+          end)
+
+        send_json(conn, 502, error_body("All providers failed", "upstream_error", details))
+
       {:error, err} ->
         send_json(conn, 502, error_body(inspect(err), "upstream_error"))
     end
@@ -468,7 +480,7 @@ defmodule Llmgateway.Server do
         {:error, %{type: :not_found}}
 
       {:error, :forbidden, fallbacks} ->
-        try_stream_fallback_list(fallbacks, body, key_name)
+        try_stream_fallback_list(fallbacks, body, key_name, [])
 
       {:error, :forbidden} ->
         {:error, %{type: :forbidden}}
@@ -480,23 +492,23 @@ defmodule Llmgateway.Server do
       {:ok, stream} ->
         {:ok, stream, deployment}
 
-      {:error, _reason} when fallbacks != [] ->
+      {:error, reason} when fallbacks != [] ->
         Logger.warning(
           "Stream #{deployment.name} failed, trying fallbacks: #{inspect(fallbacks)}"
         )
 
-        try_stream_fallback_list(fallbacks, body, nil)
+        try_stream_fallback_list(fallbacks, body, nil, [{deployment.name, reason}])
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp try_stream_fallback_list([], _body, _key_name) do
-    {:error, %{type: :all_failed, message: "All stream fallbacks failed"}}
+  defp try_stream_fallback_list([], _body, _key_name, errors) do
+    {:error, %{type: :all_failed, errors: Enum.reverse(errors)}}
   end
 
-  defp try_stream_fallback_list([fb_name | rest], body, key_name) do
+  defp try_stream_fallback_list([fb_name | rest], body, key_name, errors) do
     case Llmgateway.Router.resolve_model(fb_name, key: key_name) do
       {:ok, deployment, more_fallbacks} ->
         remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
@@ -511,17 +523,17 @@ defmodule Llmgateway.Server do
               "Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}"
             )
 
-            try_stream_fallback_list(remaining, body, key_name)
+            try_stream_fallback_list(remaining, body, key_name, [{fb_name, reason} | errors])
         end
 
       {:error, :forbidden, more_fallbacks} ->
         remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
         Logger.warning("Stream fallback #{fb_name} forbidden, remaining: #{inspect(remaining)}")
-        try_stream_fallback_list(remaining, body, key_name)
+        try_stream_fallback_list(remaining, body, key_name, [{fb_name, %{type: :forbidden}} | errors])
 
       {:error, reason} ->
         Logger.warning("Stream fallback #{fb_name} resolve failed: #{inspect(reason)}")
-        try_stream_fallback_list(rest, body, key_name)
+        try_stream_fallback_list(rest, body, key_name, [{fb_name, %{type: :inaccessible}} | errors])
     end
   end
 
