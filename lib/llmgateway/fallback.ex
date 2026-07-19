@@ -26,7 +26,10 @@ defmodule Llmgateway.Fallback do
 
       {:error, reason} when is_map(reason) ->
         if Provider.retryable?(reason) and fallback_names != [] do
-          Logger.warning("Primary #{deployment.name} failed: #{reason[:message]}. Trying fallbacks...")
+          Logger.warning(
+            "Primary #{deployment.name} failed: #{reason[:message]}. Trying fallbacks..."
+          )
+
           try_fallbacks(fallback_names, body, opts, deployment.name, [{deployment.name, reason}])
         else
           {:error, reason}
@@ -48,6 +51,7 @@ defmodule Llmgateway.Fallback do
       {:ok, fb_deployment, fb_fallbacks} ->
         # Chain: if this fallback fails, try its own fallbacks too
         remaining = Enum.uniq(rest ++ fb_fallbacks) -- [original | Enum.map(errors, &elem(&1, 0))]
+
         case Provider.call(fb_deployment, body, opts) do
           {:ok, response} ->
             depth = length(errors)

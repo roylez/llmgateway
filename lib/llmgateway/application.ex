@@ -63,6 +63,7 @@ defmodule Llmgateway.Application do
       )
     end)
   end
+
   defp validate_copilot_models(config) do
     copilot_providers = Enum.filter(config["providers"], &(&1.type == :github_copilot))
 

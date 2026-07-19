@@ -34,7 +34,7 @@ defmodule Llmgateway.Stream do
     case Auth.add_headers(base_req, deployment) do
       {:ok, req} ->
         url = Auth.request_path(deployment)
-        is_responses = (url == "/responses")
+        is_responses = url == "/responses"
 
         request_body =
           if is_responses do
@@ -62,7 +62,12 @@ defmodule Llmgateway.Stream do
         end
 
       {:error, reason} ->
-        {:error, %{type: :client_error, message: "Auth failed: #{inspect(reason)}", deployment: deployment.name}}
+        {:error,
+         %{
+           type: :client_error,
+           message: "Auth failed: #{inspect(reason)}",
+           deployment: deployment.name
+         }}
     end
   end
 
@@ -126,7 +131,6 @@ defmodule Llmgateway.Stream do
         []
     end
   end
-
 
   # ── Error helpers ─────────────────────────────────────────
 

@@ -22,7 +22,8 @@ defmodule Llmgateway.Convert.OpenAIToAnthropic do
     {thinking, reasoning_warnings} = convert_reasoning(body["reasoning_effort"])
     dropped_warnings = dropped_params(body)
 
-    max_tokens = body["max_tokens"] || body["max_completion_tokens"] || default_max_tokens(thinking)
+    max_tokens =
+      body["max_tokens"] || body["max_completion_tokens"] || default_max_tokens(thinking)
 
     result =
       %{"messages" => messages, "max_tokens" => max_tokens}
@@ -86,7 +87,7 @@ defmodule Llmgateway.Convert.OpenAIToAnthropic do
   defp convert_message(%{"role" => "assistant", "content" => content, "tool_calls" => tool_calls})
        when is_list(tool_calls) do
     content_blocks =
-      (if content, do: [%{"type" => "text", "text" => content}], else: []) ++
+      if(content, do: [%{"type" => "text", "text" => content}], else: []) ++
         Enum.map(tool_calls, &openai_tool_call_to_anthropic/1)
 
     %{"role" => "assistant", "content" => content_blocks}
@@ -172,7 +173,10 @@ defmodule Llmgateway.Convert.OpenAIToAnthropic do
 
   defp convert_tool_choice(choice), do: choice
 
-  defp openai_tool_call_to_anthropic(%{"id" => id, "function" => %{"name" => name, "arguments" => args}}) do
+  defp openai_tool_call_to_anthropic(%{
+         "id" => id,
+         "function" => %{"name" => name, "arguments" => args}
+       }) do
     input =
       case Jason.decode(args) do
         {:ok, parsed} -> parsed

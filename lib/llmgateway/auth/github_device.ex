@@ -43,11 +43,14 @@ defmodule Llmgateway.Auth.GitHubDevice do
     :access_token,
     :api_key,
     :api_key_expires_at,
-    :api_base,           # dynamic base URL from token exchange
-    :model_endpoints,    # %{"gpt-5.5" => ["/responses"], ...}
+    # dynamic base URL from token exchange
+    :api_base,
+    # %{"gpt-5.5" => ["/responses"], ...}
+    :model_endpoints,
     :token_dir,
     :status,
-    :refresh_timer       # timer ref for proactive refresh
+    # timer ref for proactive refresh
+    :refresh_timer
   ]
 
   # ── Client API ────────────────────────────────────────────
@@ -94,9 +97,13 @@ defmodule Llmgateway.Auth.GitHubDevice do
     token_dir = Path.join(base_dir, "github_copilot_#{provider_name}")
 
     case File.mkdir_p(token_dir) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, reason} ->
-        Logger.warning("[#{provider_name}] Cannot create token dir #{token_dir}: #{reason}. Token caching disabled.")
+        Logger.warning(
+          "[#{provider_name}] Cannot create token dir #{token_dir}: #{reason}. Token caching disabled."
+        )
     end
 
     state = %__MODULE__{
@@ -114,14 +121,21 @@ defmodule Llmgateway.Auth.GitHubDevice do
     case get_valid_api_key(state) do
       {:ok, _key, state} ->
         Logger.info("[#{state.provider_name}] Using cached Copilot token")
-        state = if state.model_endpoints, do: schedule_refresh(state), else: fetch_model_endpoints(state) |> schedule_refresh()
+
+        state =
+          if state.model_endpoints,
+            do: schedule_refresh(state),
+            else: fetch_model_endpoints(state) |> schedule_refresh()
+
         {:noreply, state}
 
       {:needs_refresh, state} ->
         Logger.info("[#{state.provider_name}] Refreshing Copilot API key...")
+
         case refresh_api_key(state) do
           {:ok, _key, refreshed} ->
             {:noreply, refreshed}
+
           {:error, _} ->
             Logger.info("[#{state.provider_name}] Refresh failed, starting device flow...")
             start_device_flow_eager(state)
@@ -225,7 +239,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
 
   @impl true
   def handle_info(:refresh_api_key, state) do
-    Logger.info("[#{state.provider_name}] Proactive API key refresh...")
+    Logger.debug("[#{state.provider_name}] Proactive API key refresh...")
     state = %{state | refresh_timer: nil}
 
     case get_valid_api_key(state) do
@@ -233,8 +247,12 @@ defmodule Llmgateway.Auth.GitHubDevice do
         case refresh_api_key(state) do
           {:ok, _key, refreshed} ->
             {:noreply, refreshed}
+
           {:error, _reason} ->
-            Logger.warning("[#{state.provider_name}] Proactive refresh failed, will retry on next request")
+            Logger.warning(
+              "[#{state.provider_name}] Proactive refresh failed, will retry on next request"
+            )
+
             {:noreply, state}
         end
 
@@ -265,7 +283,6 @@ defmodule Llmgateway.Auth.GitHubDevice do
   end
 
   # ── Device flow ───────────────────────────────────────────
-
 
   defp start_device_flow_eager(state) do
     case request_device_code() do
@@ -304,10 +321,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
            headers: @github_headers
          ) do
       {:ok, %{status: 200, body: body}} ->
-        {:ok,
-         body["device_code"],
-         body["user_code"],
-         body["verification_uri"],
+        {:ok, body["device_code"], body["user_code"], body["verification_uri"],
          body["interval"] || 5}
 
       {:ok, %{status: status, body: body}} ->
@@ -363,6 +377,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
     case Req.get(@api_key_url, headers: headers) do
       {:ok, %{status: 200, body: %{"token" => api_key} = body}} ->
         expires_at = body["expires_at"]
+
         exp =
           case DateTime.from_iso8601(to_string(expires_at)) do
             {:ok, dt, _} -> DateTime.to_unix(dt)
@@ -372,11 +387,12 @@ defmodule Llmgateway.Auth.GitHubDevice do
 
         api_base = get_in(body, ["endpoints", "api"]) || "https://api.githubcopilot.com"
 
-        new_state = %{state |
-          api_key: api_key,
-          api_key_expires_at: exp,
-          api_base: api_base,
-          status: :authenticated
+        new_state = %{
+          state
+          | api_key: api_key,
+            api_key_expires_at: exp,
+            api_base: api_base,
+            status: :authenticated
         }
 
         save_api_key(new_state)
@@ -413,7 +429,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
           end)
 
         save_model_endpoints(state, endpoints)
-        Logger.info("[#{state.provider_name}] Cached #{map_size(endpoints)} model endpoints")
+        Logger.debug("[#{state.provider_name}] Cached #{map_size(endpoints)} model endpoints")
         %{state | model_endpoints: endpoints}
 
       {:ok, %{status: status}} ->
@@ -463,7 +479,14 @@ defmodule Llmgateway.Auth.GitHubDevice do
               end
 
             api_base = data["api_base"] || "https://api.githubcopilot.com"
-            %{state | api_key: key, api_key_expires_at: exp_unix, api_base: api_base, status: :authenticated}
+
+            %{
+              state
+              | api_key: key,
+                api_key_expires_at: exp_unix,
+                api_base: api_base,
+                status: :authenticated
+            }
 
           _ ->
             state
@@ -478,8 +501,11 @@ defmodule Llmgateway.Auth.GitHubDevice do
     path = Path.join(state.token_dir, "access-token")
 
     case File.write(path, state.access_token || "") do
-      :ok -> File.chmod(path, 0o600)
-      {:error, reason} -> Logger.warning("[#{state.provider_name}] Cannot save access token: #{reason}")
+      :ok ->
+        File.chmod(path, 0o600)
+
+      {:error, reason} ->
+        Logger.warning("[#{state.provider_name}] Cannot save access token: #{reason}")
     end
   end
 
@@ -494,8 +520,11 @@ defmodule Llmgateway.Auth.GitHubDevice do
       })
 
     case File.write(path, data) do
-      :ok -> File.chmod(path, 0o600)
-      {:error, reason} -> Logger.warning("[#{state.provider_name}] Cannot save API key: #{reason}")
+      :ok ->
+        File.chmod(path, 0o600)
+
+      {:error, reason} ->
+        Logger.warning("[#{state.provider_name}] Cannot save API key: #{reason}")
     end
   end
 
@@ -516,9 +545,13 @@ defmodule Llmgateway.Auth.GitHubDevice do
         case Jason.decode(content) do
           {:ok, endpoints} when is_map(endpoints) ->
             %{state | model_endpoints: endpoints}
-          _ -> state
+
+          _ ->
+            state
         end
-      _ -> state
+
+      _ ->
+        state
     end
   end
 end

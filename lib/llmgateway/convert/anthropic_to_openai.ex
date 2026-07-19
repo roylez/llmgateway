@@ -63,12 +63,20 @@ defmodule Llmgateway.Convert.AnthropicToOpenAI do
        "created" => System.os_time(:second),
        "model" => msg["model"],
        "choices" => [
-         %{"index" => 0, "delta" => %{"role" => "assistant", "content" => ""}, "finish_reason" => nil}
+         %{
+           "index" => 0,
+           "delta" => %{"role" => "assistant", "content" => ""},
+           "finish_reason" => nil
+         }
        ]
      }}
   end
 
-  def convert_stream_event(%{"type" => "content_block_delta", "delta" => %{"type" => "text_delta", "text" => text}, "index" => _idx}) do
+  def convert_stream_event(%{
+        "type" => "content_block_delta",
+        "delta" => %{"type" => "text_delta", "text" => text},
+        "index" => _idx
+      }) do
     {:ok,
      %{
        "object" => "chat.completion.chunk",
@@ -78,7 +86,11 @@ defmodule Llmgateway.Convert.AnthropicToOpenAI do
      }}
   end
 
-  def convert_stream_event(%{"type" => "content_block_delta", "delta" => %{"type" => "input_json_delta", "partial_json" => json}, "index" => idx}) do
+  def convert_stream_event(%{
+        "type" => "content_block_delta",
+        "delta" => %{"type" => "input_json_delta", "partial_json" => json},
+        "index" => idx
+      }) do
     {:ok,
      %{
        "object" => "chat.completion.chunk",
@@ -94,7 +106,11 @@ defmodule Llmgateway.Convert.AnthropicToOpenAI do
      }}
   end
 
-  def convert_stream_event(%{"type" => "content_block_start", "content_block" => %{"type" => "tool_use", "id" => id, "name" => name}, "index" => idx}) do
+  def convert_stream_event(%{
+        "type" => "content_block_start",
+        "content_block" => %{"type" => "tool_use", "id" => id, "name" => name},
+        "index" => idx
+      }) do
     {:ok,
      %{
        "object" => "chat.completion.chunk",
@@ -103,7 +119,12 @@ defmodule Llmgateway.Convert.AnthropicToOpenAI do
            "index" => 0,
            "delta" => %{
              "tool_calls" => [
-               %{"index" => idx, "id" => id, "type" => "function", "function" => %{"name" => name, "arguments" => ""}}
+               %{
+                 "index" => idx,
+                 "id" => id,
+                 "type" => "function",
+                 "function" => %{"name" => name, "arguments" => ""}
+               }
              ]
            },
            "finish_reason" => nil
@@ -112,7 +133,11 @@ defmodule Llmgateway.Convert.AnthropicToOpenAI do
      }}
   end
 
-  def convert_stream_event(%{"type" => "message_delta", "delta" => %{"stop_reason" => stop_reason}, "usage" => usage}) do
+  def convert_stream_event(%{
+        "type" => "message_delta",
+        "delta" => %{"stop_reason" => stop_reason},
+        "usage" => usage
+      }) do
     finish_reason = Map.get(@stop_reason_map, stop_reason, "stop")
 
     {:ok,
@@ -125,7 +150,10 @@ defmodule Llmgateway.Convert.AnthropicToOpenAI do
      }}
   end
 
-  def convert_stream_event(%{"type" => "message_delta", "delta" => %{"stop_reason" => stop_reason}}) do
+  def convert_stream_event(%{
+        "type" => "message_delta",
+        "delta" => %{"stop_reason" => stop_reason}
+      }) do
     finish_reason = Map.get(@stop_reason_map, stop_reason, "stop")
 
     {:ok,

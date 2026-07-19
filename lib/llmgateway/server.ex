@@ -23,12 +23,12 @@ defmodule Llmgateway.Server do
 
   require Logger
 
-  plug Plug.Logger, log: :debug
-  plug :parse_body
-  plug :authenticate
-  plug Llmgateway.Plugs.StripV1Prefix
-  plug :match
-  plug :dispatch
+  plug(Plug.Logger, log: :debug)
+  plug(:parse_body)
+  plug(:authenticate)
+  plug(Llmgateway.Plugs.StripV1Prefix)
+  plug(:match)
+  plug(:dispatch)
 
   # ── Health ─────────────────────────────────────────────────
 
@@ -166,10 +166,16 @@ defmodule Llmgateway.Server do
     case Llmgateway.Router.resolve_model(model_name, key: conn.assigns[:key_name]) do
       {:ok, _deployment, _} ->
         text =
-          [body["system"] || "" | Enum.map(body["messages"] || [], fn m -> m["content"] || "" end)]
+          [
+            body["system"] || ""
+            | Enum.map(body["messages"] || [], fn m -> m["content"] || "" end)
+          ]
           |> Enum.join()
 
-        send_json(conn, 200, %{"input_tokens" => div(String.length(text), 4), "output_tokens" => 0})
+        send_json(conn, 200, %{
+          "input_tokens" => div(String.length(text), 4),
+          "output_tokens" => 0
+        })
 
       {:error, :not_found} ->
         send_json(conn, 404, error_body("Model '#{model_name}' not found", "not_found"))
@@ -471,11 +477,18 @@ defmodule Llmgateway.Server do
 
   defp try_stream_with_fallbacks(deployment, fallbacks, body, _key_name) do
     case Llmgateway.Stream.call(deployment, body) do
-      {:ok, stream} -> {:ok, stream, deployment}
+      {:ok, stream} ->
+        {:ok, stream, deployment}
+
       {:error, _reason} when fallbacks != [] ->
-        Logger.warning("Stream #{deployment.name} failed, trying fallbacks: #{inspect(fallbacks)}")
+        Logger.warning(
+          "Stream #{deployment.name} failed, trying fallbacks: #{inspect(fallbacks)}"
+        )
+
         try_stream_fallback_list(fallbacks, body, nil)
-      {:error, reason} -> {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -488,10 +501,16 @@ defmodule Llmgateway.Server do
       {:ok, deployment, more_fallbacks} ->
         remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
         Logger.debug("Stream trying #{fb_name}, remaining chain: #{inspect(remaining)}")
+
         case Llmgateway.Stream.call(deployment, body) do
-          {:ok, stream} -> {:ok, stream, deployment}
+          {:ok, stream} ->
+            {:ok, stream, deployment}
+
           {:error, reason} ->
-            Logger.warning("Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}")
+            Logger.warning(
+              "Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}"
+            )
+
             try_stream_fallback_list(remaining, body, key_name)
         end
 
@@ -599,15 +618,22 @@ defmodule Llmgateway.Server do
           case Plug.Conn.read_body(conn, length: 10_000_000) do
             {:ok, raw, conn} ->
               case Jason.decode(raw) do
-                {:ok, parsed} -> %{conn | body_params: parsed}
-                {:error, _} -> conn |> send_json(400, error_body("Invalid JSON", "invalid_request")) |> halt()
+                {:ok, parsed} ->
+                  %{conn | body_params: parsed}
+
+                {:error, _} ->
+                  conn |> send_json(400, error_body("Invalid JSON", "invalid_request")) |> halt()
               end
 
             {:more, _, conn} ->
-              conn |> send_json(413, error_body("Request body too large", "invalid_request")) |> halt()
+              conn
+              |> send_json(413, error_body("Request body too large", "invalid_request"))
+              |> halt()
 
             {:error, _reason} ->
-              conn |> send_json(400, error_body("Failed to read body", "invalid_request")) |> halt()
+              conn
+              |> send_json(400, error_body("Failed to read body", "invalid_request"))
+              |> halt()
           end
         else
           conn
@@ -629,7 +655,9 @@ defmodule Llmgateway.Server do
           if Process.whereis(Llmgateway.Router) do
             assign(conn, :key_name, nil)
           else
-            conn |> send_json(503, error_body("Router not started", "service_unavailable")) |> halt()
+            conn
+            |> send_json(503, error_body("Router not started", "service_unavailable"))
+            |> halt()
           end
 
         token ->
@@ -638,7 +666,9 @@ defmodule Llmgateway.Server do
               assign(conn, :key_name, key_name)
 
             {:error, :invalid_key} ->
-              conn |> send_json(401, error_body("Invalid API key", "authentication_error")) |> halt()
+              conn
+              |> send_json(401, error_body("Invalid API key", "authentication_error"))
+              |> halt()
           end
       end
     end
@@ -646,7 +676,9 @@ defmodule Llmgateway.Server do
 
   defp extract_bearer(conn) do
     case Plug.Conn.get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> token
+      ["Bearer " <> token] ->
+        token
+
       _ ->
         case Plug.Conn.get_req_header(conn, "x-api-key") do
           [key] -> key

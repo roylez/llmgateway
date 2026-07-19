@@ -146,8 +146,9 @@ defmodule Llmgateway.Config do
              api_key: p["api_key"],
              client_id: p["client_id"],
              runtime: provider_meta.runtime,
-             base_url: (provider_meta.runtime && provider_meta.runtime.base_url) ||
-                         provider_meta.base_url
+             base_url:
+               (provider_meta.runtime && provider_meta.runtime.base_url) ||
+                 provider_meta.base_url
            }}
 
         :error ->

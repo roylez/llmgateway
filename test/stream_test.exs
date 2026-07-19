@@ -43,11 +43,12 @@ defmodule Llmgateway.StreamTest do
     end
 
     test "handles multiple events in single chunk" do
-      chunk = Enum.join([
-        "data: {\"id\":\"1\"}\n\n",
-        "data: {\"id\":\"2\"}\n\n",
-        "data: {\"id\":\"3\"}\n\n"
-      ])
+      chunk =
+        Enum.join([
+          "data: {\"id\":\"1\"}\n\n",
+          "data: {\"id\":\"2\"}\n\n",
+          "data: {\"id\":\"3\"}\n\n"
+        ])
 
       lines = LlmStream.parse_sse_lines(chunk)
       assert length(lines) == 3

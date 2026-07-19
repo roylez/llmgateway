@@ -1,8 +1,7 @@
 import Config
 
 # Compact log format — no leading newline, no extra blank lines
-config :logger, :default_formatter,
-  format: "$time [$level] $message\n"
+config :logger, :default_formatter, format: "$time [$level] $message\n"
 
 # Production: info level (fallbacks, auth, lifecycle — no per-request debug)
 # Dev: debug level (all requests logged)

@@ -41,17 +41,23 @@ defmodule Llmgateway.Telemetry do
   def request_start(deployment) do
     meta = %{
       model: deployment.name,
+      upstream_model: deployment.upstream_model,
       deployment: deployment.name,
       provider: deployment.provider_type
     }
 
-    :telemetry.execute([:llmgateway, :request, :start], %{system_time: System.system_time()}, meta)
+    :telemetry.execute(
+      [:llmgateway, :request, :start],
+      %{system_time: System.system_time()},
+      meta
+    )
+
     {System.monotonic_time(), meta}
   end
 
-  @doc false
-  def request_stop({start_time, meta}, status) do
+  def request_stop({start_time, meta}, status, usage \\ nil) do
     duration = System.monotonic_time() - start_time
+    meta = if usage, do: Map.put(meta, :usage, usage), else: meta
 
     :telemetry.execute(
       [:llmgateway, :request, :stop],
@@ -99,14 +105,27 @@ defmodule Llmgateway.Telemetry do
     )
   end
 
-  @doc false
-  def handle_event([:llmgateway, :request, :start], _measurements, meta, _config) do
-    Logger.info("[llmgateway] → #{meta.model} via #{meta.provider}")
+  def handle_event([:llmgateway, :request, :start], _measurements, _meta, _config) do
+    # Suppressed — merged into stop event
+    :ok
   end
 
   def handle_event([:llmgateway, :request, :stop], measurements, meta, _config) do
     ms = System.convert_time_unit(measurements.duration, :native, :millisecond)
-    Logger.info("[llmgateway] ← #{meta.model} #{meta.status} (#{ms}ms)")
+    upstream = Map.get(meta, :upstream_model, meta.model)
+
+    usage_str =
+      case Map.get(meta, :usage) do
+        nil ->
+          ""
+
+        u ->
+          " input=#{u["prompt_tokens"] || "?"} output=#{u["completion_tokens"] || "?"} total=#{u["total_tokens"] || "?"}"
+      end
+
+    Logger.info(
+      "[llmgateway] model=#{meta.model} upstream=#{upstream} provider=#{meta.provider}#{usage_str} time=#{ms}ms"
+    )
   end
 
   def handle_event([:llmgateway, :request, :exception], measurements, meta, _config) do

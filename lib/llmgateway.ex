@@ -92,6 +92,7 @@ defmodule Llmgateway do
   def resolve_key(token) do
     Router.resolve_key(token)
   end
+
   defp try_fallback_only([], _body, _opts) do
     {:error, %{type: :forbidden, message: "No accessible fallbacks"}}
   end
@@ -125,5 +126,4 @@ defmodule Llmgateway do
         try_stream_fallback(rest, body, opts)
     end
   end
-
 end

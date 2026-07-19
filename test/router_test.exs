@@ -32,7 +32,9 @@ defmodule Llmgateway.RouterTest do
     end
 
     test "returns fallback chain" do
-      assert {:ok, deployment, fallbacks} = Router.resolve_model("deepseek-v4-flash", key: "work-key")
+      assert {:ok, deployment, fallbacks} =
+               Router.resolve_model("deepseek-v4-flash", key: "work-key")
+
       assert deployment.name == "deepseek-v4-flash"
       assert fallbacks == ["gpt-4o-mini"]
     end

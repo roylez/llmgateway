@@ -108,14 +108,18 @@ defmodule Llmgateway.Router do
       state.models
       |> Enum.flat_map(fn {name, configs} ->
         case find_accessible(configs, key_name) do
-          nil -> []
+          nil ->
+            []
+
           m ->
-            [%{
-              id: name,
-              object: "model",
-              owned_by: Atom.to_string(m.provider_type),
-              limits: %{context: m.context, output: m.output_limit}
-            }]
+            [
+              %{
+                id: name,
+                object: "model",
+                owned_by: Atom.to_string(m.provider_type),
+                limits: %{context: m.context, output: m.output_limit}
+              }
+            ]
         end
       end)
 
@@ -172,12 +176,15 @@ defmodule Llmgateway.Router do
   # ── Model resolution (pattern matching on key access) ────
 
   # No model entries for this name
-  defp resolve(name, _key_name, %{models: models}) when not is_map_key(models, name), do: :not_found
+  defp resolve(name, _key_name, %{models: models}) when not is_map_key(models, name),
+    do: :not_found
 
   # No key provided — take first unrestricted deployment
   defp resolve(name, nil, state) do
     case find_accessible(state.models[name], nil) do
-      nil -> :forbidden
+      nil ->
+        :forbidden
+
       config ->
         case build_deployment(config, state) do
           {:ok, _} = ok -> ok
@@ -189,7 +196,9 @@ defmodule Llmgateway.Router do
   # Key provided — find first deployment accessible by this key
   defp resolve(name, key_name, state) do
     case find_accessible(state.models[name], key_name) do
-      nil -> :forbidden
+      nil ->
+        :forbidden
+
       config ->
         case build_deployment(config, state) do
           {:ok, _} = ok -> ok
@@ -207,7 +216,6 @@ defmodule Llmgateway.Router do
     end)
   end
 
-
   defp find_accessible(configs, key_name) do
     Enum.find(configs, fn
       %{keys: nil} -> true
@@ -215,6 +223,7 @@ defmodule Llmgateway.Router do
       _ -> true
     end)
   end
+
   # ── Deployment building ───────────────────────────────────
 
   defp build_deployment(model_config, state) do
@@ -243,6 +252,4 @@ defmodule Llmgateway.Router do
   defp find_fallbacks(model_name, %{fallbacks: fallbacks}) do
     Map.get(fallbacks, model_name) || Map.get(fallbacks, "*") || []
   end
-
-
 end

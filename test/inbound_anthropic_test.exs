@@ -47,7 +47,10 @@ defmodule Llmgateway.InboundAnthropicTest do
           %{
             "name" => "get_weather",
             "description" => "Get weather",
-            "input_schema" => %{"type" => "object", "properties" => %{"city" => %{"type" => "string"}}}
+            "input_schema" => %{
+              "type" => "object",
+              "properties" => %{"city" => %{"type" => "string"}}
+            }
           }
         ],
         "tool_choice" => %{"type" => "auto"}
@@ -104,12 +107,23 @@ defmodule Llmgateway.InboundAnthropicTest do
         "model" => "claude",
         "messages" => [
           %{"role" => "user", "content" => "Weather?"},
-          %{"role" => "assistant", "content" => [
-            %{"type" => "tool_use", "id" => "tu_1", "name" => "get_weather", "input" => %{"city" => "Paris"}}
-          ]},
-          %{"role" => "user", "content" => [
-            %{"type" => "tool_result", "tool_use_id" => "tu_1", "content" => "Sunny"}
-          ]}
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{
+                "type" => "tool_use",
+                "id" => "tu_1",
+                "name" => "get_weather",
+                "input" => %{"city" => "Paris"}
+              }
+            ]
+          },
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "tool_result", "tool_use_id" => "tu_1", "content" => "Sunny"}
+            ]
+          }
         ],
         "max_tokens" => 100
       }
@@ -133,10 +147,16 @@ defmodule Llmgateway.InboundAnthropicTest do
       body = %{
         "model" => "claude",
         "messages" => [
-          %{"role" => "user", "content" => [
-            %{"type" => "text", "text" => "What's this?"},
-            %{"type" => "image", "source" => %{"type" => "base64", "media_type" => "image/png", "data" => "abc123"}}
-          ]}
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "text", "text" => "What's this?"},
+              %{
+                "type" => "image",
+                "source" => %{"type" => "base64", "media_type" => "image/png", "data" => "abc123"}
+              }
+            ]
+          }
         ],
         "max_tokens" => 100
       }
@@ -183,7 +203,11 @@ defmodule Llmgateway.InboundAnthropicTest do
               "role" => "assistant",
               "content" => nil,
               "tool_calls" => [
-                %{"id" => "call_1", "type" => "function", "function" => %{"name" => "get_weather", "arguments" => ~s({"city":"Paris"})}}
+                %{
+                  "id" => "call_1",
+                  "type" => "function",
+                  "function" => %{"name" => "get_weather", "arguments" => ~s({"city":"Paris"})}
+                }
               ]
             },
             "finish_reason" => "tool_calls"
@@ -246,7 +270,9 @@ defmodule Llmgateway.InboundAnthropicTest do
       chunk = %{
         "id" => "chatcmpl-1",
         "model" => "gpt-4o",
-        "choices" => [%{"delta" => %{"role" => "assistant", "content" => ""}, "finish_reason" => nil}]
+        "choices" => [
+          %{"delta" => %{"role" => "assistant", "content" => ""}, "finish_reason" => nil}
+        ]
       }
 
       assert {:ok, events, _state} = InboundAnthropic.chunk_to_anthropic_events(chunk)
@@ -260,7 +286,9 @@ defmodule Llmgateway.InboundAnthropicTest do
         "choices" => [%{"delta" => %{"content" => "Hello"}, "finish_reason" => nil}]
       }
 
-      assert {:ok, [event], _state} = InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
+      assert {:ok, [event], _state} =
+               InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
+
       assert event["type"] == "content_block_delta"
       assert event["delta"]["text"] == "Hello"
     end
@@ -271,7 +299,9 @@ defmodule Llmgateway.InboundAnthropicTest do
         "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 5}
       }
 
-      assert {:ok, events, _state} = InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
+      assert {:ok, events, _state} =
+               InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
+
       types = Enum.map(events, & &1["type"])
       assert "content_block_stop" in types
       assert "message_delta" in types

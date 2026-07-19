@@ -66,46 +66,55 @@ defmodule Llmgateway.Convert.ResponsesAPI do
   Returns `{:ok, chunk}`, `:skip`, or `:done`.
   """
   def stream_event_to_chunk(%{"type" => "response.created", "response" => resp}) do
-    {:ok, %{
-      "id" => resp["id"],
-      "object" => "chat.completion.chunk",
-      "created" => System.os_time(:second),
-      "model" => resp["model"],
-      "choices" => [
-        %{"index" => 0, "delta" => %{"role" => "assistant", "content" => ""}, "finish_reason" => nil}
-      ]
-    }}
+    {:ok,
+     %{
+       "id" => resp["id"],
+       "object" => "chat.completion.chunk",
+       "created" => System.os_time(:second),
+       "model" => resp["model"],
+       "choices" => [
+         %{
+           "index" => 0,
+           "delta" => %{"role" => "assistant", "content" => ""},
+           "finish_reason" => nil
+         }
+       ]
+     }}
   end
 
   def stream_event_to_chunk(%{"type" => "response.output_text.delta", "delta" => delta}) do
-    {:ok, %{
-      "object" => "chat.completion.chunk",
-      "choices" => [
-        %{"index" => 0, "delta" => %{"content" => delta}, "finish_reason" => nil}
-      ]
-    }}
+    {:ok,
+     %{
+       "object" => "chat.completion.chunk",
+       "choices" => [
+         %{"index" => 0, "delta" => %{"content" => delta}, "finish_reason" => nil}
+       ]
+     }}
   end
 
-  def stream_event_to_chunk(%{"type" => "response.content_part.delta", "delta" => delta}) when is_binary(delta) do
-    {:ok, %{
-      "object" => "chat.completion.chunk",
-      "choices" => [
-        %{"index" => 0, "delta" => %{"content" => delta}, "finish_reason" => nil}
-      ]
-    }}
+  def stream_event_to_chunk(%{"type" => "response.content_part.delta", "delta" => delta})
+      when is_binary(delta) do
+    {:ok,
+     %{
+       "object" => "chat.completion.chunk",
+       "choices" => [
+         %{"index" => 0, "delta" => %{"content" => delta}, "finish_reason" => nil}
+       ]
+     }}
   end
 
   def stream_event_to_chunk(%{"type" => "response.completed", "response" => resp}) do
     finish_reason = convert_status(resp["status"])
     usage = convert_usage(resp["usage"])
 
-    {:ok, %{
-      "object" => "chat.completion.chunk",
-      "choices" => [
-        %{"index" => 0, "delta" => %{}, "finish_reason" => finish_reason}
-      ],
-      "usage" => usage
-    }}
+    {:ok,
+     %{
+       "object" => "chat.completion.chunk",
+       "choices" => [
+         %{"index" => 0, "delta" => %{}, "finish_reason" => finish_reason}
+       ],
+       "usage" => usage
+     }}
   end
 
   def stream_event_to_chunk(%{"type" => "response.output_text.done"}), do: :skip
@@ -139,7 +148,8 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     %{"role" => "developer", "content" => c}
   end
 
-  defp convert_input_message(%{"role" => "assistant", "content" => c, "tool_calls" => tcs}) when is_list(tcs) do
+  defp convert_input_message(%{"role" => "assistant", "content" => c, "tool_calls" => tcs})
+       when is_list(tcs) do
     # Responses API doesn't use tool_calls in messages the same way
     # Return as assistant message with content
     %{"role" => "assistant", "content" => c || ""}
@@ -165,7 +175,8 @@ defmodule Llmgateway.Convert.ResponsesAPI do
             "parameters" => func["parameters"] || %{}
           }
 
-        tool -> tool
+        tool ->
+          tool
       end)
 
     Map.put(result, "tools", converted)
@@ -198,7 +209,8 @@ defmodule Llmgateway.Convert.ResponsesAPI do
 
           {ts ++ new_texts, tcs}
 
-        %{"type" => "function_call", "name" => name, "arguments" => args, "call_id" => id}, {ts, tcs} ->
+        %{"type" => "function_call", "name" => name, "arguments" => args, "call_id" => id},
+        {ts, tcs} ->
           tc = %{
             "id" => id,
             "type" => "function",

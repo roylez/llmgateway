@@ -123,7 +123,10 @@ defmodule Llmgateway.ServerTest do
         call(
           :post,
           "/v1/chat/completions",
-          %{"model" => "deepseek-v4-flash", "messages" => [%{"role" => "user", "content" => "hi"}]},
+          %{
+            "model" => "deepseek-v4-flash",
+            "messages" => [%{"role" => "user", "content" => "hi"}]
+          },
           [{"authorization", "Bearer test-personal-key-value"}]
         )
 

@@ -6,14 +6,22 @@ defmodule Llmgateway.Deployment do
   """
 
   defstruct [
-    :name,           # local alias, e.g. "deepseek-v4-flash"
-    :provider_name,  # named provider reference, e.g. "openrouter"
-    :provider_type,  # llm_db provider atom, e.g. :openrouter
-    :upstream_model, # upstream model ID, e.g. "deepseek/deepseek-v4-flash"
-    :api_key,        # resolved API key string or nil
-    :base_url,       # base URL from llm_db provider metadata + config overrides
-    :context,        # context limit from llm_db model metadata
-    :output_limit    # output limit from llm_db model metadata
+    # local alias, e.g. "deepseek-v4-flash"
+    :name,
+    # named provider reference, e.g. "openrouter"
+    :provider_name,
+    # llm_db provider atom, e.g. :openrouter
+    :provider_type,
+    # upstream model ID, e.g. "deepseek/deepseek-v4-flash"
+    :upstream_model,
+    # resolved API key string or nil
+    :api_key,
+    # base URL from llm_db provider metadata + config overrides
+    :base_url,
+    # context limit from llm_db model metadata
+    :context,
+    # output limit from llm_db model metadata
+    :output_limit
   ]
 
   @type t :: %__MODULE__{

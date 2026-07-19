@@ -92,7 +92,10 @@ defmodule Llmgateway.ConvertTest do
             "function" => %{
               "name" => "get_weather",
               "description" => "Get weather",
-              "parameters" => %{"type" => "object", "properties" => %{"city" => %{"type" => "string"}}}
+              "parameters" => %{
+                "type" => "object",
+                "properties" => %{"city" => %{"type" => "string"}}
+              }
             }
           }
         ],
@@ -127,7 +130,11 @@ defmodule Llmgateway.ConvertTest do
             "role" => "assistant",
             "content" => nil,
             "tool_calls" => [
-              %{"id" => "call_1", "type" => "function", "function" => %{"name" => "get_weather", "arguments" => ~s({"city":"Paris"})}}
+              %{
+                "id" => "call_1",
+                "type" => "function",
+                "function" => %{"name" => "get_weather", "arguments" => ~s({"city":"Paris"})}
+              }
             ]
           },
           %{"role" => "tool", "tool_call_id" => "call_1", "content" => "Sunny, 22C"}
@@ -137,7 +144,9 @@ defmodule Llmgateway.ConvertTest do
       {result, _} = OpenAIToAnthropic.convert_request(body)
 
       assistant = Enum.at(result["messages"], 1)
-      assert [%{"type" => "tool_use", "id" => "call_1", "name" => "get_weather"}] = assistant["content"]
+
+      assert [%{"type" => "tool_use", "id" => "call_1", "name" => "get_weather"}] =
+               assistant["content"]
 
       tool_result = Enum.at(result["messages"], 2)
       assert tool_result["role"] == "user"
@@ -199,7 +208,12 @@ defmodule Llmgateway.ConvertTest do
         "role" => "assistant",
         "model" => "claude-sonnet-4-20250514",
         "content" => [
-          %{"type" => "tool_use", "id" => "tu_1", "name" => "get_weather", "input" => %{"city" => "Paris"}}
+          %{
+            "type" => "tool_use",
+            "id" => "tu_1",
+            "name" => "get_weather",
+            "input" => %{"city" => "Paris"}
+          }
         ],
         "stop_reason" => "tool_use",
         "usage" => %{"input_tokens" => 20, "output_tokens" => 15}
@@ -266,7 +280,11 @@ defmodule Llmgateway.ConvertTest do
     test "message_start event" do
       event = %{
         "type" => "message_start",
-        "message" => %{"id" => "msg_1", "model" => "claude-sonnet-4-20250514", "role" => "assistant"}
+        "message" => %{
+          "id" => "msg_1",
+          "model" => "claude-sonnet-4-20250514",
+          "role" => "assistant"
+        }
       }
 
       assert {:ok, chunk} = AnthropicToOpenAI.convert_stream_event(event)
@@ -275,7 +293,11 @@ defmodule Llmgateway.ConvertTest do
     end
 
     test "text delta event" do
-      event = %{"type" => "content_block_delta", "delta" => %{"type" => "text_delta", "text" => "Hello"}, "index" => 0}
+      event = %{
+        "type" => "content_block_delta",
+        "delta" => %{"type" => "text_delta", "text" => "Hello"},
+        "index" => 0
+      }
 
       assert {:ok, chunk} = AnthropicToOpenAI.convert_stream_event(event)
       assert hd(chunk["choices"])["delta"]["content"] == "Hello"

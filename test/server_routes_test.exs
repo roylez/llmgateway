@@ -132,7 +132,12 @@ defmodule Llmgateway.ServerRoutesTest do
 
   describe "POST /v1/moderations" do
     test "returns benign result for string input" do
-      conn = call(:post, "/v1/moderations", %{"input" => "hello world", "model" => "text-moderation-stable"})
+      conn =
+        call(:post, "/v1/moderations", %{
+          "input" => "hello world",
+          "model" => "text-moderation-stable"
+        })
+
       assert conn.status == 200
       body = json(conn)
       assert String.starts_with?(body["id"], "modr-")
@@ -180,8 +185,13 @@ defmodule Llmgateway.ServerRoutesTest do
   describe "not-implemented POST routes" do
     test "POST /v1/embeddings returns 501", do: assert_501(:post, "/v1/embeddings")
     test "POST /v1/audio/speech returns 501", do: assert_501(:post, "/v1/audio/speech")
-    test "POST /v1/audio/transcriptions returns 501", do: assert_501(:post, "/v1/audio/transcriptions")
-    test "POST /v1/images/generations returns 501", do: assert_501(:post, "/v1/images/generations")
+
+    test "POST /v1/audio/transcriptions returns 501",
+      do: assert_501(:post, "/v1/audio/transcriptions")
+
+    test "POST /v1/images/generations returns 501",
+      do: assert_501(:post, "/v1/images/generations")
+
     test "POST /v1/images/edits returns 501", do: assert_501(:post, "/v1/images/edits")
     test "POST /v1/rerank returns 501", do: assert_501(:post, "/v1/rerank")
   end
@@ -192,7 +202,10 @@ defmodule Llmgateway.ServerRoutesTest do
     test "GET /v1/files returns empty list", do: assert_empty_list(:get, "/v1/files")
     test "POST /v1/files returns 501", do: assert_501(:post, "/v1/files")
     test "GET /v1/files/:id returns 404", do: assert_404(:get, "/v1/files/file-abc")
-    test "GET /v1/files/:id/content returns 404", do: assert_404(:get, "/v1/files/file-abc/content")
+
+    test "GET /v1/files/:id/content returns 404",
+      do: assert_404(:get, "/v1/files/file-abc/content")
+
     test "DELETE /v1/files/:id returns 404", do: assert_404(:delete, "/v1/files/file-abc")
   end
 
@@ -200,13 +213,20 @@ defmodule Llmgateway.ServerRoutesTest do
     test "GET /v1/batches returns empty list", do: assert_empty_list(:get, "/v1/batches")
     test "POST /v1/batches returns 501", do: assert_501(:post, "/v1/batches")
     test "GET /v1/batches/:id returns 404", do: assert_404(:get, "/v1/batches/batch-abc")
-    test "POST /v1/batches/:id/cancel returns 404", do: assert_404(:post, "/v1/batches/batch-abc/cancel")
+
+    test "POST /v1/batches/:id/cancel returns 404",
+      do: assert_404(:post, "/v1/batches/batch-abc/cancel")
   end
 
   describe "fine_tuning/jobs" do
-    test "GET /v1/fine_tuning/jobs returns empty list", do: assert_empty_list(:get, "/v1/fine_tuning/jobs")
+    test "GET /v1/fine_tuning/jobs returns empty list",
+      do: assert_empty_list(:get, "/v1/fine_tuning/jobs")
+
     test "POST /v1/fine_tuning/jobs returns 501", do: assert_501(:post, "/v1/fine_tuning/jobs")
-    test "GET /v1/fine_tuning/jobs/:id returns 404", do: assert_404(:get, "/v1/fine_tuning/jobs/job-abc")
+
+    test "GET /v1/fine_tuning/jobs/:id returns 404",
+      do: assert_404(:get, "/v1/fine_tuning/jobs/job-abc")
+
     test "POST /v1/fine_tuning/jobs/:id/cancel returns 404",
       do: assert_404(:post, "/v1/fine_tuning/jobs/job-abc/cancel")
   end
@@ -216,16 +236,22 @@ defmodule Llmgateway.ServerRoutesTest do
     test "POST /v1/assistants returns 501", do: assert_501(:post, "/v1/assistants")
     test "GET /v1/assistants/:id returns 404", do: assert_404(:get, "/v1/assistants/asst-abc")
     test "POST /v1/assistants/:id returns 404", do: assert_404(:post, "/v1/assistants/asst-abc")
-    test "DELETE /v1/assistants/:id returns 404", do: assert_404(:delete, "/v1/assistants/asst-abc")
+
+    test "DELETE /v1/assistants/:id returns 404",
+      do: assert_404(:delete, "/v1/assistants/asst-abc")
   end
 
   describe "responses" do
     test "GET /v1/responses returns empty list", do: assert_empty_list(:get, "/v1/responses")
     test "POST /v1/responses returns 501", do: assert_501(:post, "/v1/responses")
     test "GET /v1/responses/:id returns 404", do: assert_404(:get, "/v1/responses/resp-abc")
-    test "POST /v1/responses/:id/cancel returns 404", do: assert_404(:post, "/v1/responses/resp-abc/cancel")
+
+    test "POST /v1/responses/:id/cancel returns 404",
+      do: assert_404(:post, "/v1/responses/resp-abc/cancel")
+
     test "GET /v1/responses/:id/input_items returns 404",
       do: assert_404(:get, "/v1/responses/resp-abc/input_items")
+
     test "POST /v1/responses/compact returns 501", do: assert_501(:post, "/v1/responses/compact")
   end
 
@@ -234,17 +260,29 @@ defmodule Llmgateway.ServerRoutesTest do
     test "POST /v1/threads returns 501", do: assert_501(:post, "/v1/threads")
     test "GET /v1/threads/:id returns 404", do: assert_404(:get, "/v1/threads/thread-abc")
     test "DELETE /v1/threads/:id returns 404", do: assert_404(:delete, "/v1/threads/thread-abc")
-    test "GET /v1/threads/:id/messages returns 404", do: assert_404(:get, "/v1/threads/thread-abc/messages")
-    test "POST /v1/threads/:id/messages returns 404", do: assert_404(:post, "/v1/threads/thread-abc/messages")
-    test "GET /v1/threads/:id/runs returns 404", do: assert_404(:get, "/v1/threads/thread-abc/runs")
-    test "POST /v1/threads/:id/runs returns 404", do: assert_404(:post, "/v1/threads/thread-abc/runs")
+
+    test "GET /v1/threads/:id/messages returns 404",
+      do: assert_404(:get, "/v1/threads/thread-abc/messages")
+
+    test "POST /v1/threads/:id/messages returns 404",
+      do: assert_404(:post, "/v1/threads/thread-abc/messages")
+
+    test "GET /v1/threads/:id/runs returns 404",
+      do: assert_404(:get, "/v1/threads/thread-abc/runs")
+
+    test "POST /v1/threads/:id/runs returns 404",
+      do: assert_404(:post, "/v1/threads/thread-abc/runs")
+
     test "GET /v1/threads/:id/runs/:run_id returns 404",
       do: assert_404(:get, "/v1/threads/thread-abc/runs/run-xyz")
   end
 
   describe "realtime" do
     test "GET /v1/realtime returns 501", do: assert_501(:get, "/v1/realtime")
-    test "GET /v1/realtime/calls returns empty list", do: assert_empty_list(:get, "/v1/realtime/calls")
+
+    test "GET /v1/realtime/calls returns empty list",
+      do: assert_empty_list(:get, "/v1/realtime/calls")
+
     test "GET /v1/realtime/client_secrets returns empty list",
       do: assert_empty_list(:get, "/v1/realtime/client_secrets")
   end

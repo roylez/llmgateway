@@ -144,23 +144,28 @@ defmodule Llmgateway.Convert.InboundAnthropic do
         tool_events =
           Enum.flat_map(delta["tool_calls"], fn tc ->
             if tc["id"] do
-              [%{
-                "type" => "content_block_start",
-                "index" => tc["index"],
-                "content_block" => %{
-                  "type" => "tool_use",
-                  "id" => tc["id"],
-                  "name" => get_in(tc, ["function", "name"]) || "",
-                  "input" => %{}
+              [
+                %{
+                  "type" => "content_block_start",
+                  "index" => tc["index"],
+                  "content_block" => %{
+                    "type" => "tool_use",
+                    "id" => tc["id"],
+                    "name" => get_in(tc, ["function", "name"]) || "",
+                    "input" => %{}
+                  }
                 }
-              }]
+              ]
             else
               args = get_in(tc, ["function", "arguments"]) || ""
-              [%{
-                "type" => "content_block_delta",
-                "index" => tc["index"],
-                "delta" => %{"type" => "input_json_delta", "partial_json" => args}
-              }]
+
+              [
+                %{
+                  "type" => "content_block_delta",
+                  "index" => tc["index"],
+                  "delta" => %{"type" => "input_json_delta", "partial_json" => args}
+                }
+              ]
             end
           end)
 
@@ -171,6 +176,7 @@ defmodule Llmgateway.Convert.InboundAnthropic do
 
     # Finish reason → message_delta + message_stop (only once)
     finished = state[:finished] || false
+
     events =
       if finish_reason && not finished do
         stop_reason = Map.get(@finish_reason_map, finish_reason, "end_turn")
@@ -181,11 +187,12 @@ defmodule Llmgateway.Convert.InboundAnthropic do
           "usage" => convert_usage(chunk["usage"])
         }
 
-        events ++ [
-          %{"type" => "content_block_stop", "index" => state[:block_index] || 0},
-          usage_event,
-          %{"type" => "message_stop"}
-        ]
+        events ++
+          [
+            %{"type" => "content_block_stop", "index" => state[:block_index] || 0},
+            usage_event,
+            %{"type" => "message_stop"}
+          ]
       else
         events
       end
@@ -209,7 +216,7 @@ defmodule Llmgateway.Convert.InboundAnthropic do
 
   defp build_messages(system, messages) when is_list(system) do
     # Anthropic supports system as list of content blocks
-    text = system |> Enum.map_join("\n", & &1["text"]) 
+    text = system |> Enum.map_join("\n", & &1["text"])
     [%{"role" => "system", "content" => text} | convert_messages(messages)]
   end
 
@@ -373,12 +380,16 @@ defmodule Llmgateway.Convert.InboundAnthropic do
   defp convert_tool_choice(nil), do: nil
   defp convert_tool_choice(%{"type" => "auto"}), do: "auto"
   defp convert_tool_choice(%{"type" => "any"}), do: "required"
-  defp convert_tool_choice(%{"type" => "tool", "name" => name}), do: %{"type" => "function", "function" => %{"name" => name}}
+
+  defp convert_tool_choice(%{"type" => "tool", "name" => name}),
+    do: %{"type" => "function", "function" => %{"name" => name}}
+
   defp convert_tool_choice(choice), do: choice
 
   # ── Thinking → reasoning_effort ───────────────────────────
 
   defp maybe_put_thinking(map, nil), do: map
+
   defp maybe_put_thinking(map, %{"type" => "enabled", "budget_tokens" => budget}) do
     effort =
       cond do
@@ -389,6 +400,7 @@ defmodule Llmgateway.Convert.InboundAnthropic do
 
     Map.put(map, "reasoning_effort", effort)
   end
+
   defp maybe_put_thinking(map, _), do: map
 
   # ── Usage conversion ──────────────────────────────────────
