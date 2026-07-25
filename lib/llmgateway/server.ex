@@ -38,6 +38,9 @@ defmodule Llmgateway.Server do
   get "/health" do
     send_json(conn, 200, %{"status" => "ok"})
   end
+  head "/api/hello" do
+    send_json(conn, 200, %{})
+  end
 
   # ── Models ─────────────────────────────────────────────────
 
