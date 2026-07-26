@@ -266,7 +266,7 @@ defmodule Llmgateway.InboundAnthropicTest do
   end
 
   describe "chunk_to_anthropic_events/2" do
-    test "first chunk with role emits message_start" do
+    test "first chunk with role emits message_start (no eager text block)" do
       chunk = %{
         "id" => "chatcmpl-1",
         "model" => "gpt-4o",
@@ -275,32 +275,37 @@ defmodule Llmgateway.InboundAnthropicTest do
         ]
       }
 
-      assert {:ok, events, _state} = InboundAnthropic.chunk_to_anthropic_events(chunk)
+      assert {:ok, events, state} = InboundAnthropic.chunk_to_anthropic_events(chunk)
       types = Enum.map(events, & &1["type"])
       assert "message_start" in types
-      assert "content_block_start" in types
+      # No eager content_block_start — text block opens on first real content
+      refute "content_block_start" in types
+      refute state[:text_open]
     end
 
-    test "text delta chunk" do
+    test "text delta lazily opens text block" do
       chunk = %{
         "choices" => [%{"delta" => %{"content" => "Hello"}, "finish_reason" => nil}]
       }
 
-      assert {:ok, [event], _state} =
+      assert {:ok, events, state} =
                InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
 
-      assert event["type"] == "content_block_delta"
-      assert event["delta"]["text"] == "Hello"
+      types = Enum.map(events, & &1["type"])
+      assert "content_block_start" in types
+      assert "content_block_delta" in types
+      assert state[:text_open]
+      assert state[:next_idx] == 1
     end
 
-    test "finish chunk emits stop events" do
+    test "finish chunk with text block open emits stop events" do
       chunk = %{
         "choices" => [%{"delta" => %{}, "finish_reason" => "stop"}],
         "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 5}
       }
 
       assert {:ok, events, _state} =
-               InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
+               InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true, text_open: true, next_idx: 1})
 
       types = Enum.map(events, & &1["type"])
       assert "content_block_stop" in types
@@ -314,6 +319,197 @@ defmodule Llmgateway.InboundAnthropicTest do
       }
 
       assert {:skip, _state} = InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true})
+    end
+
+    test "reasoning_content becomes thinking block" do
+      chunks = [
+        %{"id" => "c1", "model" => "m", "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
+        %{"choices" => [%{"delta" => %{"reasoning_content" => "Let me think"}, "finish_reason" => nil}]},
+        %{"choices" => [%{"delta" => %{"reasoning_content" => " about this"}, "finish_reason" => nil}]},
+        %{"choices" => [%{"delta" => %{"content" => "The answer is 42"}, "finish_reason" => nil}]},
+        %{"choices" => [%{"delta" => %{}, "finish_reason" => "stop"}], "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}}
+      ]
+
+      {all_events, _final_state} =
+        Enum.reduce(chunks, {[], %{}}, fn chunk, {evts, st} ->
+          case InboundAnthropic.chunk_to_anthropic_events(chunk, st) do
+            {:ok, new_evts, new_st} -> {evts ++ new_evts, new_st}
+            {:skip, new_st} -> {evts, new_st}
+          end
+        end)
+
+      block_starts = Enum.filter(all_events, &(&1["type"] == "content_block_start"))
+      assert length(block_starts) == 2
+      assert hd(block_starts)["content_block"]["type"] == "thinking"
+      assert hd(block_starts)["index"] == 0
+      assert List.last(block_starts)["content_block"]["type"] == "text"
+      assert List.last(block_starts)["index"] == 1
+
+      thinking_deltas = Enum.filter(all_events, fn e ->
+        e["type"] == "content_block_delta" && e["delta"]["type"] == "thinking_delta"
+      end)
+      assert length(thinking_deltas) == 2
+      assert Enum.all?(thinking_deltas, &(&1["index"] == 0))
+      assert Enum.map_join(thinking_deltas, "", & &1["delta"]["thinking"]) == "Let me think about this"
+
+      # Thinking block closed before text block opens
+      event_types = Enum.map(all_events, & &1["type"])
+      blocks_with_idx =
+        all_events
+        |> Enum.with_index()
+        |> Enum.filter(fn {e, _} -> e["type"] == "content_block_start" end)
+
+      {think_start, think_pos} =
+        Enum.find(blocks_with_idx, fn {e, _} -> e["content_block"]["type"] == "thinking" end)
+
+      {text_start, text_pos} =
+        Enum.find(blocks_with_idx, fn {e, _} -> e["content_block"]["type"] == "text" end)
+
+      think_stop_pos = Enum.find_index(event_types, &(&1 == "content_block_stop"))
+      assert think_stop_pos > think_pos
+      assert think_stop_pos < text_pos
+    end
+
+    test "tool-only response: correct indices, no phantom text block" do
+      args1 = "{\\\"city\\\":"
+      args2 = "\\\"Paris\\\"}"
+      args3 = "{\\\"city\\\":\\\"Paris\\\"}"
+
+      chunks = [
+        # 1. Role chunk
+        %{"id" => "c1", "model" => "m", "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
+        # 2. Tool call start
+        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "id" => "call_1", "function" => %{"name" => "get_weather", "arguments" => ""}}]}, "finish_reason" => nil}]},
+        # 3. Tool arg delta
+        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "function" => %{"arguments" => args1}}]}, "finish_reason" => nil}]},
+        # 4. Tool arg delta continued
+        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "function" => %{"arguments" => args2}}]}, "finish_reason" => nil}]},
+        # 5. Finish
+        %{"choices" => [%{"delta" => %{}, "finish_reason" => "tool_calls"}], "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}}
+      ]
+
+      {all_events, _final_state} =
+        Enum.reduce(chunks, {[], %{}}, fn chunk, {evts, st} ->
+          case InboundAnthropic.chunk_to_anthropic_events(chunk, st) do
+            {:ok, new_evts, new_st} -> {evts ++ new_evts, new_st}
+            {:skip, new_st} -> {evts, new_st}
+          end
+        end)
+
+      types = Enum.map(all_events, & &1["type"])
+      assert "message_start" in types
+      # Text block should never appear
+      refute Enum.any?(all_events, fn e ->
+        e["type"] == "content_block_start" && e["content_block"]["type"] == "text"
+      end)
+      refute Enum.any?(all_events, fn e ->
+        e["type"] == "content_block_delta" && e["delta"]["type"] == "text_delta"
+      end)
+
+      # Tool block at index 0
+      tool_starts = Enum.filter(all_events, &(&1["type"] == "content_block_start"))
+      assert length(tool_starts) == 1
+      assert hd(tool_starts)["index"] == 0
+      assert hd(tool_starts)["content_block"]["type"] == "tool_use"
+      assert hd(tool_starts)["content_block"]["id"] == "call_1"
+      assert hd(tool_starts)["content_block"]["name"] == "get_weather"
+
+      # Arg deltas at index 0
+      arg_deltas = Enum.filter(all_events, fn e ->
+        e["type"] == "content_block_delta" && e["delta"]["type"] == "input_json_delta"
+      end)
+      assert length(arg_deltas) == 2
+      assert Enum.all?(arg_deltas, &(&1["index"] == 0))
+      assert Enum.map_join(arg_deltas, "", & &1["delta"]["partial_json"]) == args3
+
+      # Proper stop sequence
+      assert "content_block_stop" in types
+      assert "message_delta" in types
+      assert "message_stop" in types
+
+      stop_reason_event = Enum.find(all_events, &(&1["type"] == "message_delta"))
+      assert stop_reason_event["delta"]["stop_reason"] == "tool_use"
+    end
+
+    test "text then tool: indices are distinct, text block closed before tool" do
+      tool_args = "{\\\"x\\\":1}"
+
+      chunks = [
+        # 1. Role
+        %{"id" => "c1", "model" => "m", "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
+        # 2. Text
+        %{"choices" => [%{"delta" => %{"content" => "Let me check"}, "finish_reason" => nil}]},
+        # 3. Tool start
+        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "id" => "call_1", "function" => %{"name" => "f", "arguments" => ""}}]}, "finish_reason" => nil}]},
+        # 4. Tool arg
+        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "function" => %{"arguments" => tool_args}}]}, "finish_reason" => nil}]},
+        # 5. Finish
+        %{"choices" => [%{"delta" => %{}, "finish_reason" => "tool_calls"}], "usage" => %{"prompt_tokens" => 5, "completion_tokens" => 15}}
+      ]
+
+      {all_events, _final_state} =
+        Enum.reduce(chunks, {[], %{}}, fn chunk, {evts, st} ->
+          case InboundAnthropic.chunk_to_anthropic_events(chunk, st) do
+            {:ok, new_evts, new_st} -> {evts ++ new_evts, new_st}
+            {:skip, new_st} -> {evts, new_st}
+          end
+        end)
+
+      # Text block at index 0, tool block at index 1
+      block_starts = Enum.filter(all_events, &(&1["type"] == "content_block_start"))
+      assert length(block_starts) == 2
+      assert hd(block_starts)["index"] == 0
+      assert hd(block_starts)["content_block"]["type"] == "text"
+      assert List.last(block_starts)["index"] == 1
+      assert List.last(block_starts)["content_block"]["type"] == "tool_use"
+
+      # Text block stop comes before tool block start
+      event_types_with_idx =
+        all_events
+        |> Enum.with_index()
+        |> Enum.map(fn {e, i} -> {e["type"], e["content_block"], i} end)
+
+      {_, _text_cb, text_start_pos} =
+        Enum.find(event_types_with_idx, fn {type, cb, _} -> type == "content_block_start" && cb && cb["type"] == "text" end)
+
+      {_, _tool_cb, tool_start_pos} =
+        Enum.find(event_types_with_idx, fn {type, cb, _} -> type == "content_block_start" && cb && cb["type"] == "tool_use" end)
+
+      # First content_block_stop should be for text (at index 0) and come before tool start
+      first_stop_pos = Enum.find_index(all_events, &(&1["type"] == "content_block_stop"))
+      assert first_stop_pos > text_start_pos
+      assert first_stop_pos < tool_start_pos
+
+      # Arg deltas at Anthropic index 1 (not 0)
+      arg_deltas = Enum.filter(all_events, fn e ->
+        e["type"] == "content_block_delta" && e["delta"]["type"] == "input_json_delta"
+      end)
+      assert Enum.all?(arg_deltas, &(&1["index"] == 1))
+    end
+  end
+  describe "sanitize_args/1" do
+    test "strips trailing period after closing brace" do
+      args = "{\"key\": \"val\"}\n."
+      result = InboundAnthropic.sanitize_args(args)
+      assert result == "{\"key\": \"val\"}"
+    end
+
+    test "strips trailing tabs and spaces after closing brace" do
+      args = "{\"key\": \"val\"}\t\t \n."
+      result = InboundAnthropic.sanitize_args(args)
+      assert result == "{\"key\": \"val\"}"
+    end
+
+    test "does not modify clean JSON" do
+      args = "{\"key\": \"val\"}"
+      result = InboundAnthropic.sanitize_args(args)
+      assert result == args
+    end
+
+    test "handles array with trailing junk" do
+      args = "[1, 2, 3]."
+      result = InboundAnthropic.sanitize_args(args)
+      assert result == "[1, 2, 3]"
     end
   end
 end

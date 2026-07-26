@@ -83,12 +83,17 @@ defmodule Llmgateway.Convert.InboundAnthropic do
     choice = List.first(choices) || %{}
     delta = choice["delta"] || %{}
     finish_reason = choice["finish_reason"]
+    started = state[:started] || false
+    thinking_open = state[:thinking_open] || false
+    text_open = state[:text_open] || false
+    next_idx = state[:next_idx] || 0
+    open_tool_ath_idx = state[:open_tool_ath_idx]
+    tool_index_map = state[:tool_index_map] || %{}
 
     events = []
-    started = state[:started] || false
 
-    # Emit message_start only on first chunk (not yet started)
-    events =
+    # Emit message_start only on first chunk — NO eager blocks
+    {events, started} =
       if not started and delta["role"] do
         msg_start = %{
           "type" => "message_start",
@@ -104,82 +109,181 @@ defmodule Llmgateway.Convert.InboundAnthropic do
           }
         }
 
-        content_start = %{
-          "type" => "content_block_start",
-          "index" => 0,
-          "content_block" => %{"type" => "text", "text" => ""}
-        }
-
-        events ++ [msg_start, content_start]
+        {events ++ [msg_start], true}
       else
-        events
+        {events, started}
       end
 
-    # Text content delta
-    events =
+    # Reasoning/thinking content — lazily open thinking block on first reasoning_content
+    {events, thinking_open, next_idx, open_tool_ath_idx} =
+      if delta["reasoning_content"] && delta["reasoning_content"] != "" do
+        # Close any open tool block before switching to thinking
+        {events, open_tool_ath_idx} =
+          if open_tool_ath_idx != nil do
+            {events ++ [%{"type" => "content_block_stop", "index" => open_tool_ath_idx}], nil}
+          else
+            {events, open_tool_ath_idx}
+          end
+
+        {events, thinking_open, next_idx} =
+          if not thinking_open do
+            block_start = %{
+              "type" => "content_block_start",
+              "index" => next_idx,
+              "content_block" => %{"type" => "thinking", "thinking" => ""}
+            }
+
+            {events ++ [block_start], true, next_idx + 1}
+          else
+            {events, thinking_open, next_idx}
+          end
+
+        thinking_idx = next_idx - 1
+
+        thinking_delta = %{
+          "type" => "content_block_delta",
+          "index" => thinking_idx,
+          "delta" => %{"type" => "thinking_delta", "thinking" => delta["reasoning_content"]}
+        }
+
+        {events ++ [thinking_delta], thinking_open, next_idx, open_tool_ath_idx}
+      else
+        {events, thinking_open, next_idx, open_tool_ath_idx}
+      end
+
+    # Text content delta — lazily open text block on first content
+    {events, thinking_open, text_open, next_idx} =
       if delta["content"] && delta["content"] != "" do
+        # Close thinking block if open (thinking always precedes text)
+        {events, thinking_open} =
+          if thinking_open do
+            thinking_stop_idx = next_idx - 1
+            {events ++ [%{"type" => "content_block_stop", "index" => thinking_stop_idx}], false}
+          else
+            {events, thinking_open}
+          end
+
+        {events, text_open, next_idx} =
+          if not text_open do
+            block_start = %{
+              "type" => "content_block_start",
+              "index" => next_idx,
+              "content_block" => %{"type" => "text", "text" => ""}
+            }
+
+            {events ++ [block_start], true, next_idx + 1}
+          else
+            {events, text_open, next_idx}
+          end
+
+        text_idx = next_idx - 1
+
         text_delta = %{
           "type" => "content_block_delta",
-          "index" => state[:block_index] || 0,
+          "index" => text_idx,
           "delta" => %{"type" => "text_delta", "text" => delta["content"]}
         }
 
-        events ++ [text_delta]
+        {events ++ [text_delta], thinking_open, text_open, next_idx}
       else
-        events
-      end
-
-    # Reasoning content delta (deepseek etc.)
-    events =
-      if delta["reasoning"] && delta["reasoning"] != "" do
-        # Pass reasoning as a text delta too — clients can distinguish by context
-        events
-      else
-        events
+        {events, thinking_open, text_open, next_idx}
       end
 
     # Tool call deltas
-    events =
+    {events, thinking_open, text_open, next_idx, open_tool_ath_idx, tool_index_map} =
       if delta["tool_calls"] do
-        tool_events =
-          Enum.flat_map(delta["tool_calls"], fn tc ->
-            if tc["id"] do
-              [
-                %{
-                  "type" => "content_block_start",
-                  "index" => tc["index"],
-                  "content_block" => %{
-                    "type" => "tool_use",
-                    "id" => tc["id"],
-                    "name" => get_in(tc, ["function", "name"]) || "",
-                    "input" => %{}
-                  }
-                }
-              ]
-            else
-              args = get_in(tc, ["function", "arguments"]) || ""
+        # Close thinking block if open before switching to tool
+        {events, thinking_open} =
+          if thinking_open do
+            thinking_stop_idx = next_idx - 1
+            {events ++ [%{"type" => "content_block_stop", "index" => thinking_stop_idx}], false}
+          else
+            {events, thinking_open}
+          end
 
-              [
-                %{
-                  "type" => "content_block_delta",
-                  "index" => tc["index"],
-                  "delta" => %{"type" => "input_json_delta", "partial_json" => args}
+        {events, text_open, next_idx, open_tool_ath_idx, tool_index_map} =
+          Enum.reduce(delta["tool_calls"], {events, text_open, next_idx, open_tool_ath_idx, tool_index_map}, fn tc, {evts, t_open, n_idx, o_tool_ath, t_map} ->
+            oa_idx = tc["index"]
+
+            if tc["id"] do
+              # New tool call — close preceding blocks if open
+              evts =
+                if t_open do
+                  text_stop_idx = n_idx - 1
+                  evts ++ [%{"type" => "content_block_stop", "index" => text_stop_idx}]
+                else
+                  evts
+                end
+
+              {evts, o_tool_ath} =
+                case o_tool_ath do
+                  nil -> {evts, nil}
+                  idx -> {evts ++ [%{"type" => "content_block_stop", "index" => idx}], nil}
+                end
+              ath_idx = n_idx
+
+              block_start = %{
+                "type" => "content_block_start",
+                "index" => ath_idx,
+                "content_block" => %{
+                  "type" => "tool_use",
+                  "id" => tc["id"],
+                  "name" => get_in(tc, ["function", "name"]) || "",
+                  "input" => %{}
                 }
-              ]
+              }
+
+              t_map = Map.put(t_map, oa_idx, ath_idx)
+
+              # If arguments came in the same chunk, emit them as a delta
+              args = sanitize_args(get_in(tc, ["function", "arguments"]) || "")
+              events = if args != "", do: evts ++ [block_start, %{"type" => "content_block_delta", "index" => ath_idx, "delta" => %{"type" => "input_json_delta", "partial_json" => args}}], else: evts ++ [block_start]
+
+              t_map = Map.put(t_map, oa_idx, ath_idx)
+
+              {events, false, n_idx + 1, ath_idx, t_map}
+            else
+              # Argument delta for existing tool
+              args = sanitize_args(get_in(tc, ["function", "arguments"]) || "")
+              ath_idx = Map.get(t_map, oa_idx, oa_idx)
+
+              arg_delta = %{
+                "type" => "content_block_delta",
+                "index" => ath_idx,
+                "delta" => %{"type" => "input_json_delta", "partial_json" => args}
+              }
+
+              {evts ++ [arg_delta], t_open, n_idx, o_tool_ath, t_map}
             end
           end)
 
-        events ++ tool_events
+        {events, thinking_open, text_open, next_idx, open_tool_ath_idx, tool_index_map}
       else
-        events
+        {events, thinking_open, text_open, next_idx, open_tool_ath_idx, tool_index_map}
       end
 
-    # Finish reason → message_delta + message_stop (only once)
+    # Finish reason → close open block, then message_delta + message_stop
     finished = state[:finished] || false
 
-    events =
+    {events, finished} =
       if finish_reason && not finished do
         stop_reason = Map.get(@finish_reason_map, finish_reason, "end_turn")
+
+        # Close whatever block is currently open
+        events =
+          cond do
+            text_open ->
+              events ++ [%{"type" => "content_block_stop", "index" => next_idx - 1}]
+
+            open_tool_ath_idx != nil ->
+              events ++ [%{"type" => "content_block_stop", "index" => open_tool_ath_idx}]
+
+            thinking_open ->
+              events ++ [%{"type" => "content_block_stop", "index" => next_idx - 1}]
+
+            true ->
+              events
+          end
 
         usage_event = %{
           "type" => "message_delta",
@@ -187,20 +291,20 @@ defmodule Llmgateway.Convert.InboundAnthropic do
           "usage" => convert_usage(chunk["usage"])
         }
 
-        events ++
-          [
-            %{"type" => "content_block_stop", "index" => state[:block_index] || 0},
-            usage_event,
-            %{"type" => "message_stop"}
-          ]
+        {events ++ [usage_event, %{"type" => "message_stop"}], true}
       else
-        events
+        {events, finished}
       end
 
     new_state =
       state
-      |> Map.put(:started, true)
+      |> Map.put(:started, started)
       |> Map.put(:finished, finished || finish_reason != nil)
+      |> Map.put(:thinking_open, thinking_open)
+      |> Map.put(:text_open, text_open)
+      |> Map.put(:next_idx, next_idx)
+      |> Map.put(:open_tool_ath_idx, open_tool_ath_idx)
+      |> Map.put(:tool_index_map, tool_index_map)
 
     if events == [], do: {:skip, new_state}, else: {:ok, events, new_state}
   end
@@ -428,6 +532,18 @@ defmodule Llmgateway.Convert.InboundAnthropic do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # Strip trailing non-JSON junk from tool arguments.
+  # Some models append spurious characters (e.g. "." or control chars)
+  # after the closing brace/bracket.
+  def sanitize_args(args) do
+    args = String.trim_trailing(args)
+    # If string ends with } or ] followed by junk, trim to the last } or ]
+    case Regex.run(~r/(\}|\])[^}\]]*$/, args) do
+      [full, closer] -> String.slice(args, 0, String.length(args) - String.length(full)) <> closer
+      _ -> args
+    end
+  end
 
   defp random_id do
     :crypto.strong_rand_bytes(12) |> Base.hex_encode32(case: :lower, padding: false)

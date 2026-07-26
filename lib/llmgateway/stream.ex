@@ -45,6 +45,7 @@ defmodule Llmgateway.Stream do
               provider_body
             end
 
+
           case Req.post(req, url: url, json: request_body, into: :self) do
             {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
               stream =

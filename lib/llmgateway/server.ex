@@ -589,7 +589,7 @@ defmodule Llmgateway.Server do
           |> put_resp_header("x-context-length", to_string(deployment.context || 0))
           |> send_chunked(200)
 
-        state = %{block_index: 0}
+        state = %{}
 
         {conn, _state} =
           Enum.reduce_while(stream, {conn, state}, fn
