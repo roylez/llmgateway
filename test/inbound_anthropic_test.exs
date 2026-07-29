@@ -370,6 +370,38 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert think_stop_pos < text_pos
     end
 
+    test "bare reasoning key becomes thinking block (deepseek-style)" do
+      chunks = [
+        %{"id" => "c1", "model" => "m", "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
+        %{"choices" => [%{"delta" => %{"reasoning" => "Let me think"}, "finish_reason" => nil}]},
+        %{"choices" => [%{"delta" => %{"reasoning" => " about this"}, "finish_reason" => nil}]},
+        %{"choices" => [%{"delta" => %{"content" => "The answer is 42"}, "finish_reason" => nil}]},
+        %{"choices" => [%{"delta" => %{}, "finish_reason" => "stop"}], "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}}
+      ]
+
+      {all_events, _final_state} =
+        Enum.reduce(chunks, {[], %{}}, fn chunk, {evts, st} ->
+          case InboundAnthropic.chunk_to_anthropic_events(chunk, st) do
+            {:ok, new_evts, new_st} -> {evts ++ new_evts, new_st}
+            {:skip, new_st} -> {evts, new_st}
+          end
+        end)
+
+      block_starts = Enum.filter(all_events, &(&1["type"] == "content_block_start"))
+      assert length(block_starts) == 2
+      assert hd(block_starts)["content_block"]["type"] == "thinking"
+      assert hd(block_starts)["index"] == 0
+      assert List.last(block_starts)["content_block"]["type"] == "text"
+      assert List.last(block_starts)["index"] == 1
+
+      thinking_deltas = Enum.filter(all_events, fn e ->
+        e["type"] == "content_block_delta" && e["delta"]["type"] == "thinking_delta"
+      end)
+      assert length(thinking_deltas) == 2
+      assert Enum.all?(thinking_deltas, &(&1["index"] == 0))
+      assert Enum.map_join(thinking_deltas, "", & &1["delta"]["thinking"]) == "Let me think about this"
+    end
+
     test "tool-only response: correct indices, no phantom text block" do
       args1 = "{\\\"city\\\":"
       args2 = "\\\"Paris\\\"}"

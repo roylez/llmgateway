@@ -114,9 +114,12 @@ defmodule Llmgateway.Convert.InboundAnthropic do
         {events, started}
       end
 
-    # Reasoning/thinking content — lazily open thinking block on first reasoning_content
+    # Reasoning/thinking content — lazily open thinking block on first reasoning
+    # Supports both "reasoning_content" (OpenAI) and bare "reasoning" (deepseek etc.)
+    reasoning = delta["reasoning_content"] || delta["reasoning"]
+
     {events, thinking_open, next_idx, open_tool_ath_idx} =
-      if delta["reasoning_content"] && delta["reasoning_content"] != "" do
+      if reasoning && reasoning != "" do
         # Close any open tool block before switching to thinking
         {events, open_tool_ath_idx} =
           if open_tool_ath_idx != nil do
@@ -143,7 +146,7 @@ defmodule Llmgateway.Convert.InboundAnthropic do
         thinking_delta = %{
           "type" => "content_block_delta",
           "index" => thinking_idx,
-          "delta" => %{"type" => "thinking_delta", "thinking" => delta["reasoning_content"]}
+          "delta" => %{"type" => "thinking_delta", "thinking" => reasoning}
         }
 
         {events ++ [thinking_delta], thinking_open, next_idx, open_tool_ath_idx}
@@ -215,7 +218,7 @@ defmodule Llmgateway.Convert.InboundAnthropic do
                   evts
                 end
 
-              {evts, o_tool_ath} =
+              {evts, _o_tool_ath} =
                 case o_tool_ath do
                   nil -> {evts, nil}
                   idx -> {evts ++ [%{"type" => "content_block_stop", "index" => idx}], nil}
@@ -238,8 +241,6 @@ defmodule Llmgateway.Convert.InboundAnthropic do
               # If arguments came in the same chunk, emit them as a delta
               args = sanitize_args(get_in(tc, ["function", "arguments"]) || "")
               events = if args != "", do: evts ++ [block_start, %{"type" => "content_block_delta", "index" => ath_idx, "delta" => %{"type" => "input_json_delta", "partial_json" => args}}], else: evts ++ [block_start]
-
-              t_map = Map.put(t_map, oa_idx, ath_idx)
 
               {events, false, n_idx + 1, ath_idx, t_map}
             else
