@@ -34,10 +34,24 @@ models:
     keys:
       - personal-key
 
+  - name: ds-flash-personal
+    provider: openrouter-personal
+    model: deepseek/deepseek-chat
+    keys:
+      - personal-key
+
   - name: gpt-4o-mini
     provider: openai-main
     model: gpt-4o-mini
 
+  - name: glm-5-turbo
+    provider: openrouter-personal
+    model: glm/glm-5-turbo
+    keys:
+      - personal-key
+
 fallbacks:
   deepseek-v4-flash:
     - gpt-4o-mini
+  glm-5-turbo:
+    - ds-flash-personal

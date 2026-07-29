@@ -501,7 +501,7 @@ defmodule Llmgateway.Server do
     end
   end
 
-  defp try_stream_with_fallbacks(deployment, fallbacks, body, _key_name) do
+  defp try_stream_with_fallbacks(deployment, fallbacks, body, key_name) do
     case Llmgateway.Stream.call(deployment, body) do
       {:ok, stream} ->
         {:ok, stream, deployment}
@@ -511,7 +511,7 @@ defmodule Llmgateway.Server do
           "Stream #{deployment.name} failed, trying fallbacks: #{inspect(fallbacks)}"
         )
 
-        try_stream_fallback_list(fallbacks, body, nil, [{deployment.name, reason}])
+        try_stream_fallback_list(fallbacks, body, key_name, [{deployment.name, reason}])
 
       {:error, reason} ->
         {:error, reason}

@@ -134,6 +134,39 @@ defmodule Llmgateway.ServerTest do
       # The fallback tries to call OpenAI for real, fails with transport error
       assert conn.status in [403, 500, 502]
     end
+
+    test "streaming fallback threads the client key to key-restricted models" do
+      # glm-5-turbo (personal-key only) → ds-flash-personal (personal-key only, no own fallbacks)
+      # Without the fix, ds-flash-personal resolves with nil key → :forbidden/inaccessible.
+      # With the fix, it resolves with personal key → actually invoked → transport_error.
+      conn =
+        call(
+          :post,
+          "/v1/chat/completions",
+          %{
+            "model" => "glm-5-turbo",
+            "stream" => true,
+            "messages" => [%{"role" => "user", "content" => "hi"}]
+          },
+          [{"authorization", "Bearer test-personal-key-value"}]
+        )
+
+      assert conn.status == 502
+
+      body = json_response(conn)
+      details = body["error"]["details"]
+
+      ds_entry = Enum.find(details, &(&1["model"] == "ds-flash-personal"))
+      assert ds_entry, "expected ds-flash-personal in error details"
+
+      # Proves the fallback was resolved with the key and actually invoked
+      # (before the fix, it would be :forbidden/:inaccessible without reaching a provider)
+      refute ds_entry["reason"] =~ "forbidden",
+             "fallback should not be forbidden when key is threaded correctly"
+
+      refute ds_entry["reason"] =~ "inaccessible",
+             "fallback should not be inaccessible when key is threaded correctly"
+    end
   end
 
   describe "unknown routes" do
