@@ -134,6 +134,7 @@ defmodule Llmgateway.Server do
   post "/messages" do
     body = conn.body_params
     key_name = conn.assigns[:key_name]
+    Logger.info("[anthropic-in] model=#{body["model"]} stream=#{body["stream"]} tools=#{length(body["tools"] || [])} key=#{key_name}")
     canonical = Llmgateway.Convert.InboundAnthropic.to_canonical(body)
 
     if body["stream"] do
@@ -591,7 +592,7 @@ defmodule Llmgateway.Server do
 
         state = %{}
 
-        {conn, _state} =
+        {conn, final_state} =
           Enum.reduce_while(stream, {conn, state}, fn
             :done, {conn, state} ->
               {:halt, {conn, state}}
@@ -599,6 +600,7 @@ defmodule Llmgateway.Server do
             chunk, {conn, state} ->
               case Llmgateway.Convert.InboundAnthropic.chunk_to_anthropic_events(chunk, state) do
                 {:ok, events, new_state} ->
+                  Logger.debug("[anthropic-stream] events=#{Enum.map_join(events, ", ", & &1["type"])}")
                   result =
                     Enum.reduce_while(events, {:ok, conn}, fn event, {:ok, c} ->
                       case chunk(c, "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n") do
@@ -617,6 +619,7 @@ defmodule Llmgateway.Server do
               end
           end)
 
+        Logger.info("[anthropic-stream] finished blocks=#{final_state[:next_idx] || 0}")
         conn
 
       {:error, %{type: :not_found}} ->

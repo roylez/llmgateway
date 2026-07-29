@@ -132,8 +132,8 @@ defmodule Llmgateway.Stream do
           :done -> [:done]
         end
 
-      {:error, _} ->
-        Logger.debug("Failed to decode SSE event: #{data}")
+      {:error, reason} ->
+        Logger.debug("Failed to decode SSE event: #{String.slice(data, 0, 200)} reason=#{inspect(reason)}")
         []
     end
   end
