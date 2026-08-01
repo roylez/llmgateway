@@ -104,7 +104,11 @@ defmodule Llmgateway.Convert.ResponsesAPI do
   end
 
   def stream_event_to_chunk(%{"type" => "response.completed", "response" => resp}) do
-    finish_reason = convert_status(resp["status"])
+    finish_reason =
+      if has_function_call(resp["output"] || []),
+        do: "tool_calls",
+        else: convert_status(resp["status"])
+
     usage = convert_usage(resp["usage"])
 
     {:ok,
@@ -117,6 +121,76 @@ defmodule Llmgateway.Convert.ResponsesAPI do
      }}
   end
 
+  # Tool calls: /responses streams them as `output_item.added` (header with
+  # name/id) followed by `function_call_arguments.delta` (partial JSON). Without
+  # these clauses every tool call falls into the catch-all and is dropped, so a
+  # tool-using model would stream only an empty `finish_reason: stop` turn.
+  def stream_event_to_chunk(%{
+        "type" => "response.output_item.added",
+        "item" => %{
+          "type" => "function_call",
+          "call_id" => call_id,
+          "name" => name
+        },
+        "output_index" => idx
+      }) do
+    {:ok,
+     %{
+       "object" => "chat.completion.chunk",
+       "choices" => [
+         %{
+           "index" => 0,
+           "delta" => %{
+             "tool_calls" => [
+               %{
+                 "index" => idx,
+                 "id" => call_id,
+                 "type" => "function",
+                 "function" => %{"name" => name, "arguments" => ""}
+               }
+             ]
+           },
+           "finish_reason" => nil
+         }
+       ]
+     }}
+  end
+
+  def stream_event_to_chunk(%{
+        "type" => "response.function_call_arguments.delta",
+        "delta" => args,
+        "output_index" => idx
+      })
+      when is_binary(args) do
+    {:ok,
+     %{
+       "object" => "chat.completion.chunk",
+       "choices" => [
+         %{
+           "index" => 0,
+           "delta" => %{
+             "tool_calls" => [%{"index" => idx, "function" => %{"arguments" => args}}]
+           },
+           "finish_reason" => nil
+         }
+       ]
+     }}
+  end
+
+  # Refusals carry assistant text the client should see; dropping them turns a
+  # refusal into a silent empty stop.
+  def stream_event_to_chunk(%{"type" => "response.refusal.delta", "delta" => text})
+      when is_binary(text) do
+    {:ok,
+     %{
+       "object" => "chat.completion.chunk",
+       "choices" => [
+         %{"index" => 0, "delta" => %{"content" => text}, "finish_reason" => nil}
+       ]
+     }}
+  end
+
+  def stream_event_to_chunk(%{"type" => "response.function_call_arguments.done"}), do: :skip
   def stream_event_to_chunk(%{"type" => "response.output_text.done"}), do: :skip
   def stream_event_to_chunk(%{"type" => "response.content_part.done"}), do: :skip
   def stream_event_to_chunk(%{"type" => "response.output_item.added"}), do: :skip
@@ -255,6 +329,12 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     tool_calls = if tool_calls == [], do: nil, else: tool_calls
     {text, tool_calls}
   end
+
+  defp has_function_call(output_items) when is_list(output_items) do
+    Enum.any?(output_items, &(&1["type"] == "function_call"))
+  end
+
+  defp has_function_call(_), do: false
 
   defp convert_status("completed"), do: "stop"
   defp convert_status("incomplete"), do: "length"

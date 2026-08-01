@@ -237,5 +237,65 @@ defmodule Llmgateway.StreamTest do
 
       refute ok_output =~ "warning"
     end
+
+    test "tool-calling responses stream is not an empty stop" do
+      # A /responses tool call (the gpt-5.6-terra path) must stream tool_calls
+      # deltas instead of degrading to an empty finish_reason: stop turn.
+      body =
+        [
+          %{
+            "type" => "response.created",
+            "response" => %{"id" => "r", "model" => "gpt-5.6-terra", "status" => "in_progress"}
+          },
+          %{
+            "type" => "response.output_item.added",
+            "output_index" => 0,
+            "item" => %{
+              "type" => "function_call",
+              "call_id" => "fc_1",
+              "name" => "get_weather",
+              "arguments" => ""
+            }
+          },
+          %{
+            "type" => "response.function_call_arguments.delta",
+            "output_index" => 0,
+            "delta" => ~s({"city":"Paris"})
+          },
+          %{
+            "type" => "response.completed",
+            "response" => %{
+              "id" => "r",
+              "model" => "gpt-5.6-terra",
+              "status" => "completed",
+              "output" => [%{"type" => "function_call", "call_id" => "fc_1", "name" => "get_weather"}]
+            }
+          }
+        ]
+        |> Enum.map_join("\n", &("data: " <> Jason.encode!(&1)))
+        |> Kernel.<>("\ndata: [DONE]\n")
+
+      items = LlmStream.build_stream(body, deployment(), true, "rid10") |> Enum.to_list()
+      assert {:stream_stats, stats} = List.last(items)
+
+      # forwarded chunks: created + tool_call header + arguments delta + completed
+      assert stats.chunks == 4
+      assert stats.text_deltas == 0
+      assert stats.tool_deltas == 2
+      assert stats.finish == "tool_calls"
+      assert stats.skipped == %{}
+
+      tool_calls =
+        items
+        |> chunks()
+        |> Enum.flat_map(fn c ->
+          get_in(c, ["choices", Access.at(0), "delta", "tool_calls"]) || []
+        end)
+
+      assert Enum.map(tool_calls, & &1["function"]["arguments"]) == ["", ~s({"city":"Paris"})]
+      [first | _] = tool_calls
+      assert first["id"] == "fc_1"
+      assert first["function"]["name"] == "get_weather"
+    end
   end
 end

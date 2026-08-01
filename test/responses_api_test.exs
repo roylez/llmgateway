@@ -569,6 +569,76 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
                ResponsesAPI.stream_event_to_chunk(%{"type" => "response.content_part.done"})
     end
 
+    test "response.output_item.added with function_call starts a tool_calls delta" do
+      event = %{
+        "type" => "response.output_item.added",
+        "output_index" => 1,
+        "item" => %{
+          "type" => "function_call",
+          "call_id" => "fc_1",
+          "name" => "get_weather",
+          "arguments" => ""
+        }
+      }
+
+      assert {:ok, chunk} = ResponsesAPI.stream_event_to_chunk(event)
+      [choice] = chunk["choices"]
+      assert choice["finish_reason"] == nil
+
+      [tool_call] = choice["delta"]["tool_calls"]
+      assert tool_call["index"] == 1
+      assert tool_call["id"] == "fc_1"
+      assert tool_call["type"] == "function"
+      assert tool_call["function"]["name"] == "get_weather"
+      assert tool_call["function"]["arguments"] == ""
+    end
+
+    test "response.output_item.added with non-function item is skipped" do
+      event = %{
+        "type" => "response.output_item.added",
+        "output_index" => 0,
+        "item" => %{"type" => "message", "content" => []}
+      }
+
+      assert :skip = ResponsesAPI.stream_event_to_chunk(event)
+    end
+
+    test "response.function_call_arguments.delta appends partial arguments" do
+      event = %{"type" => "response.function_call_arguments.delta", "output_index" => 1, "delta" => ~s({"city":"Pa)}
+
+      assert {:ok, chunk} = ResponsesAPI.stream_event_to_chunk(event)
+      [choice] = chunk["choices"]
+      assert choice["finish_reason"] == nil
+
+      [tool_call] = choice["delta"]["tool_calls"]
+      assert tool_call["index"] == 1
+      assert tool_call["function"]["arguments"] == ~s({"city":"Pa)
+    end
+
+    test "response.function_call_arguments.done is skipped" do
+      assert :skip = ResponsesAPI.stream_event_to_chunk(%{"type" => "response.function_call_arguments.done"})
+    end
+
+    test "response.completed with function call output finishes tool_calls" do
+      event = %{
+        "type" => "response.completed",
+        "response" => %{
+          "status" => "completed",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 4},
+          "output" => [%{"type" => "function_call", "name" => "get_weather", "call_id" => "fc_1"}]
+        }
+      }
+
+      assert {:ok, chunk} = ResponsesAPI.stream_event_to_chunk(event)
+      assert hd(chunk["choices"])["finish_reason"] == "tool_calls"
+    end
+
+    test "response.refusal.delta is forwarded as content" do
+      event = %{"type" => "response.refusal.delta", "delta" => "I cannot do that."}
+      assert {:ok, chunk} = ResponsesAPI.stream_event_to_chunk(event)
+      assert hd(chunk["choices"])["delta"]["content"] == "I cannot do that."
+    end
+
     test "response.in_progress is skipped" do
       assert :skip =
                ResponsesAPI.stream_event_to_chunk(%{"type" => "response.in_progress"})
