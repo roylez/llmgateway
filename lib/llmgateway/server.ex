@@ -600,7 +600,12 @@ defmodule Llmgateway.Server do
             chunk, {conn, state} ->
               case Llmgateway.Convert.InboundAnthropic.chunk_to_anthropic_events(chunk, state) do
                 {:ok, events, new_state} ->
-                  Logger.debug("[anthropic-stream] events=#{Enum.map_join(events, ", ", & &1["type"])}")
+                  # Only log when events include something other than the high-frequency
+                  # content_block_delta text deltas, which would otherwise flood the debug log.
+                  if Enum.any?(events, &(&1["type"] != "content_block_delta")) do
+                    Logger.debug("[anthropic-stream] events=#{Enum.map_join(events, ", ", & &1["type"])}")
+                  end
+
                   result =
                     Enum.reduce_while(events, {:ok, conn}, fn event, {:ok, c} ->
                       case chunk(c, "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n") do
