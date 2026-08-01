@@ -17,13 +17,14 @@ defmodule Llmgateway.Convert.ResponsesAPI do
   def to_responses(body) when is_map(body) do
     {system, messages} = extract_system(body["messages"] || [])
 
-    input = Enum.map(messages, &convert_input_message/1)
+    input = Enum.flat_map(messages, &convert_input_messages/1)
 
     result =
       %{"model" => body["model"], "input" => input}
       |> maybe_put("instructions", system)
       |> maybe_put("max_output_tokens", body["max_tokens"] || body["max_completion_tokens"])
-      |> maybe_put("temperature", body["temperature"])
+      # `temperature` is dropped: Copilot /responses rejects it for reasoning models
+      # (400 "Unsupported parameter: 'temperature'"; verified live with gpt-5.6-terra).
       |> maybe_put("top_p", body["top_p"])
       |> maybe_put("stream", body["stream"])
       |> convert_tools(body["tools"])
@@ -228,13 +229,6 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     %{"role" => "developer", "content" => c}
   end
 
-  defp convert_input_message(%{"role" => "assistant", "content" => c, "tool_calls" => tcs})
-       when is_list(tcs) do
-    # Responses API doesn't use tool_calls in messages the same way
-    # Return as assistant message with content
-    %{"role" => "assistant", "content" => c || ""}
-  end
-
   defp convert_input_message(%{"role" => "tool", "tool_call_id" => id, "content" => c}) do
     %{"type" => "function_call_output", "call_id" => id, "output" => c || ""}
   end
@@ -251,6 +245,56 @@ defmodule Llmgateway.Convert.ResponsesAPI do
   end
 
   defp convert_input_message(msg), do: msg
+
+  # A chat-completions assistant `tool_calls` entry becomes an explicit
+  # `function_call` input item. Without it, Copilot /responses rejects the
+  # following `function_call_output` ("No tool call found for function call
+  # output with call_id ...", invalid_request_body — verified live).
+  defp convert_input_messages(%{"role" => "assistant", "tool_calls" => tcs} = msg)
+       when is_list(tcs) do
+    # `tool_calls: []` is a no-op — drop the Chat-completions-only key and defer
+    # to the plain assistant conversion so it can't leak into Responses input.
+    if tcs == [] do
+      [convert_input_message(Map.delete(msg, "tool_calls"))]
+    else
+      content_item =
+        case msg["content"] do
+          nil ->
+            []
+
+          "" ->
+            []
+
+          c when is_binary(c) ->
+            [assistant_message_item([%{"type" => "output_text", "text" => c}])]
+
+          blocks when is_list(blocks) ->
+            [assistant_message_item(Enum.map(blocks, &convert_content_block("assistant", &1)))]
+
+          _ ->
+            []
+        end
+
+      call_items =
+        Enum.map(tcs, fn tc ->
+          %{
+            "type" => "function_call",
+            "call_id" => tc["id"],
+            "name" => get_in(tc, ["function", "name"]),
+            "arguments" => get_in(tc, ["function", "arguments"]) || "{}"
+          }
+        end)
+
+      content_item ++ call_items
+    end
+  end
+
+  defp convert_input_messages(msg), do: [convert_input_message(msg)]
+
+  # /responses "message" input item used to carry preserved assistant content.
+  defp assistant_message_item(content) do
+    %{"type" => "message", "role" => "assistant", "content" => content}
+  end
 
   # Responses API uses "input_text"/"output_text" instead of "text"
   defp convert_content_block("assistant", %{"type" => "text"} = block) do

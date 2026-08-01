@@ -298,15 +298,36 @@ defmodule Llmgateway.Stream do
     end
   end
 
-  defp classify_error(429, _body, deployment) do
-    %{type: :rate_limit, status: 429, deployment: deployment.name}
+  defp classify_error(429, body, deployment) do
+    %{
+      type: :rate_limit,
+      status: 429,
+      message: error_slice(body),
+      deployment: deployment.name
+    }
   end
 
-  defp classify_error(status, _body, deployment) when status >= 500 do
-    %{type: :server_error, status: status, deployment: deployment.name}
+  defp classify_error(status, body, deployment) when status >= 500 do
+    %{
+      type: :server_error,
+      status: status,
+      message: error_slice(body),
+      deployment: deployment.name
+    }
   end
 
-  defp classify_error(status, _body, deployment) do
-    %{type: :client_error, status: status, deployment: deployment.name}
+  defp classify_error(status, body, deployment) do
+    %{
+      type: :client_error,
+      status: status,
+      message: error_slice(body),
+      deployment: deployment.name
+    }
   end
+
+  # Upstream status bodies are drained to a string; keep a bounded slice so the
+  # provider's reason (e.g. Copilot's 'Unsupported parameter: …') surfaces in
+  # fallback error details and warnings instead of being discarded.
+  defp error_slice(body) when is_binary(body), do: String.slice(body, 0, 500)
+  defp error_slice(_), do: nil
 end

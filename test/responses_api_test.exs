@@ -91,7 +91,7 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
       assert result["reasoning"] == %{"effort" => "high"}
     end
 
-    test "temperature passes through" do
+    test "temperature is dropped (Copilot /responses rejects it for reasoning models)" do
       body = %{
         "model" => "gpt-4",
         "messages" => [%{"role" => "user", "content" => "Hi"}],
@@ -100,7 +100,115 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
 
       result = ResponsesAPI.to_responses(body)
 
-      assert result["temperature"] == 0.7
+      refute Map.has_key?(result, "temperature")
+    end
+
+    test "assistant tool_calls become function_call input items so outputs pair up" do
+      body = %{
+        "model" => "gpt-4",
+        "messages" => [
+          %{"role" => "user", "content" => "Read /tmp/a.txt"},
+          %{
+            "role" => "assistant",
+            "content" => nil,
+            "tool_calls" => [
+              %{
+                "id" => "call_1",
+                "type" => "function",
+                "function" => %{"name" => "read", "arguments" => "{\"path\": \"/tmp/a.txt\"}"}
+              }
+            ]
+          },
+          %{"role" => "tool", "tool_call_id" => "call_1", "content" => "file contents"}
+        ]
+      }
+
+      input = ResponsesAPI.to_responses(body)["input"]
+
+      assert Enum.any?(input, fn it -> it["type"] == "function_call" end)
+
+      call =
+        Enum.find(input, fn it -> it["type"] == "function_call" end)
+        |> Map.delete("arguments")
+
+      assert call == %{
+               "type" => "function_call",
+               "call_id" => "call_1",
+               "name" => "read"
+             }
+
+      # The tool result still pairs by call_id and the orphaned-output shape is gone.
+      assert Enum.any?(input, fn it -> it["type"] == "function_call_output" and it["call_id"] == "call_1" end)
+      refute Enum.any?(input, &(&1["role"] == "assistant" and &1["content"] == ""))
+    end
+
+    test "assistant text alongside tool_calls is kept as a separate message item" do
+      body = %{
+        "model" => "gpt-4",
+        "messages" => [
+          %{
+            "role" => "assistant",
+            "content" => "Using the tool now.",
+            "tool_calls" => [
+              %{"id" => "c2", "type" => "function", "function" => %{"name" => "ping", "arguments" => "{}"}}
+            ]
+          }
+        ]
+      }
+
+      input = ResponsesAPI.to_responses(body)["input"]
+
+      assert Enum.any?(input, fn it -> it["type"] == "function_call" and it["call_id"] == "c2" end)
+
+      assert Enum.any?(input, fn it ->
+               it["type"] == "message" and
+                 get_in(it, ["content", Access.at(0), "type"]) == "output_text"
+             end)
+    end
+
+    test "empty tool_calls does not leak the Chat-only key into responses input" do
+      body = %{
+        "model" => "gpt-4",
+        "messages" => [%{"role" => "assistant", "content" => "OK", "tool_calls" => []}]
+      }
+
+      input = ResponsesAPI.to_responses(body)["input"]
+
+      assert input == [%{"role" => "assistant", "content" => "OK"}]
+      refute Enum.any?(input, &Map.has_key?(&1, "tool_calls"))
+    end
+
+    test "assistant list content is preserved alongside tool calls" do
+      body = %{
+        "model" => "gpt-4",
+        "messages" => [
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "text", "text" => "Checking…"},
+              %{"type" => "image", "source" => %{"type" => "url", "url" => "https://example.com/x.png"}}
+            ],
+            "tool_calls" => [
+              %{"id" => "c3", "type" => "function", "function" => %{"name" => "ping", "arguments" => "{}"}}
+            ]
+          }
+        ]
+      }
+
+      input = ResponsesAPI.to_responses(body)["input"]
+
+      assert Enum.any?(input, fn it -> it["type"] == "function_call" and it["call_id"] == "c3" end)
+
+      # Text block is re-typed as output_text inside the assistant message item.
+      assert Enum.any?(input, fn it ->
+               it["type"] == "message" and it["role"] == "assistant" and
+                 Enum.any?(it["content"], &(&1["type"] == "output_text" and &1["text"] == "Checking…"))
+             end)
+
+      # Non-text blocks are carried over unchanged.
+      assert Enum.any?(input, fn it ->
+               it["type"] == "message" and Enum.any?(it["content"], &(&1["type"] == "image"))
+             end)
     end
 
     test "top_p passes through" do
