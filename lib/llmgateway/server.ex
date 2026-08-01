@@ -23,7 +23,7 @@ defmodule Llmgateway.Server do
 
   require Logger
 
-  alias Llmgateway.Telemetry
+  alias Llmgateway.{Cooldown, Provider, Telemetry}
 
 
   plug(Plug.Logger, log: :debug)
@@ -516,19 +516,31 @@ defmodule Llmgateway.Server do
   end
 
   defp try_stream_with_fallbacks(deployment, fallbacks, body, key_name, rid) do
-    case Llmgateway.Stream.call(deployment, body, rid: rid) do
-      {:ok, stream} ->
-        {:ok, stream, deployment}
+    if Cooldown.active?(deployment.provider_name, deployment.name) and fallbacks != [] do
+      Logger.info("Stream deployment #{deployment.name} cooling down; skipping to fallbacks")
 
-      {:error, reason} when fallbacks != [] ->
-        Logger.warning(
-          "rid=#{rid} Stream #{deployment.name} failed (reason: #{inspect(reason)}), trying fallbacks: #{inspect(fallbacks)}"
-        )
+      try_stream_fallback_list(fallbacks, body, key_name, [
+        {deployment.name, %{type: :cooling}}
+      ], rid)
+    else
+      case Llmgateway.Stream.call(deployment, body, rid: rid) do
+        {:ok, stream} ->
+          {:ok, stream, deployment}
 
-        try_stream_fallback_list(fallbacks, body, key_name, [{deployment.name, reason}], rid)
+        {:error, reason} when fallbacks != [] ->
+          Logger.warning(
+            "rid=#{rid} Stream #{deployment.name} failed (reason: #{inspect(reason)}), trying fallbacks: #{inspect(fallbacks)}"
+          )
 
-      {:error, reason} ->
-        {:error, reason}
+          if Provider.retryable?(reason) do
+            Cooldown.record_failure(deployment.provider_name, deployment.name)
+          end
+
+          try_stream_fallback_list(fallbacks, body, key_name, [{deployment.name, reason}], rid)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -540,18 +552,31 @@ defmodule Llmgateway.Server do
     case Llmgateway.Router.resolve_model(fb_name, key: key_name) do
       {:ok, deployment, more_fallbacks} ->
         remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
-        Logger.debug("rid=#{rid} Stream trying #{fb_name}, remaining chain: #{inspect(remaining)}")
 
-        case Llmgateway.Stream.call(deployment, body, rid: rid) do
-          {:ok, stream} ->
-            {:ok, stream, deployment}
+        if Cooldown.active?(deployment.provider_name, deployment.name) do
+          Logger.debug("rid=#{rid} Stream skipping fallback #{fb_name} (cooling down)")
 
-          {:error, reason} ->
-            Logger.warning(
-              "rid=#{rid} Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}"
-            )
+          try_stream_fallback_list(remaining, body, key_name, [
+            {fb_name, %{type: :cooling}}
+          | errors], rid)
+        else
+          Logger.debug("rid=#{rid} Stream trying #{fb_name}, remaining chain: #{inspect(remaining)}")
 
-            try_stream_fallback_list(remaining, body, key_name, [{fb_name, reason} | errors], rid)
+          case Llmgateway.Stream.call(deployment, body, rid: rid) do
+            {:ok, stream} ->
+              {:ok, stream, deployment}
+
+            {:error, reason} ->
+              Logger.warning(
+                "rid=#{rid} Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}"
+              )
+
+              if Provider.retryable?(reason) do
+                Cooldown.record_failure(deployment.provider_name, deployment.name)
+              end
+
+              try_stream_fallback_list(remaining, body, key_name, [{fb_name, reason} | errors], rid)
+          end
         end
 
       {:error, :forbidden, more_fallbacks} ->

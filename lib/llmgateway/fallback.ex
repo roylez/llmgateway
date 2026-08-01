@@ -12,7 +12,7 @@ defmodule Llmgateway.Fallback do
 
   require Logger
 
-  alias Llmgateway.{Provider, Router}
+  alias Llmgateway.{Cooldown, Provider, Router}
 
   @doc """
   Call the primary deployment, falling back through the chain on retryable errors.
@@ -20,23 +20,32 @@ defmodule Llmgateway.Fallback do
   Returns `{:ok, response}` or `{:error, reason}`.
   """
   def call_with_fallback(deployment, fallback_names, body, opts \\ []) do
-    case Provider.call(deployment, body, opts) do
-      {:ok, response} ->
-        {:ok, response}
+    if Cooldown.active?(deployment.provider_name, deployment.name) and fallback_names != [] do
+      Logger.info("Deployment #{deployment.name} cooling down; skipping to fallbacks")
+      try_fallbacks(fallback_names, body, opts, deployment.name, [])
+    else
+      case Provider.call(deployment, body, opts) do
+        {:ok, response} ->
+          {:ok, response}
 
-      {:error, reason} when is_map(reason) ->
-        if Provider.retryable?(reason) and fallback_names != [] do
-          Logger.warning(
-            "Primary #{deployment.name} failed: #{reason[:message]}. Trying fallbacks..."
-          )
+        {:error, reason} when is_map(reason) ->
+          if Provider.retryable?(reason) and fallback_names != [] do
+            Logger.warning(
+              "Primary #{deployment.name} failed: #{reason[:message]}. Trying fallbacks..."
+            )
 
-          try_fallbacks(fallback_names, body, opts, deployment.name, [{deployment.name, reason}])
-        else
+            Cooldown.record_failure(deployment.provider_name, deployment.name)
+
+            try_fallbacks(fallback_names, body, opts, deployment.name, [
+              {deployment.name, reason}
+            ])
+          else
+            {:error, reason}
+          end
+
+        {:error, reason} ->
           {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+      end
     end
   end
 
@@ -49,30 +58,37 @@ defmodule Llmgateway.Fallback do
 
     case Router.resolve_model(fb_name, key: key) do
       {:ok, fb_deployment, fb_fallbacks} ->
-        # Chain: if this fallback fails, try its own fallbacks too
-        remaining = Enum.uniq(rest ++ fb_fallbacks) -- [original | Enum.map(errors, &elem(&1, 0))]
+        if Cooldown.active?(fb_deployment.provider_name, fb_deployment.name) do
+          Logger.debug("Skipping fallback #{fb_name} (cooling down)")
+          try_fallbacks(rest, body, opts, original, [{fb_name, %{type: :cooling}} | errors])
+        else
+          # Chain: if this fallback fails, try its own fallbacks too
+          remaining =
+            Enum.uniq(rest ++ fb_fallbacks) -- [original | Enum.map(errors, &elem(&1, 0))]
 
-        case Provider.call(fb_deployment, body, opts) do
-          {:ok, response} ->
-            depth = length(errors)
-            Logger.info("Fallback to #{fb_name} succeeded after #{depth} attempt(s)")
+          case Provider.call(fb_deployment, body, opts) do
+            {:ok, response} ->
+              depth = length(errors)
+              Logger.info("Fallback to #{fb_name} succeeded after #{depth} attempt(s)")
 
-            response =
-              response
-              |> put_in(["_llmgateway", "fallback_from"], original)
-              |> put_in(["_llmgateway", "fallback_depth"], depth)
+              response =
+                response
+                |> put_in(["_llmgateway", "fallback_from"], original)
+                |> put_in(["_llmgateway", "fallback_depth"], depth)
 
-            {:ok, response}
+              {:ok, response}
 
-          {:error, reason} when is_map(reason) ->
-            if Provider.retryable?(reason) do
-              try_fallbacks(remaining, body, opts, original, [{fb_name, reason} | errors])
-            else
+            {:error, reason} when is_map(reason) ->
+              if Provider.retryable?(reason) do
+                Cooldown.record_failure(fb_deployment.provider_name, fb_deployment.name)
+                try_fallbacks(remaining, body, opts, original, [{fb_name, reason} | errors])
+              else
+                {:error, reason}
+              end
+
+            {:error, reason} ->
               {:error, reason}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
+          end
         end
 
       {:error, :forbidden, _fallbacks} ->

@@ -15,6 +15,7 @@ defmodule Llmgateway.Application do
             auth_servers = github_device_servers(config)
             router = [{Llmgateway.Router, config}]
             server = maybe_start_server(config)
+            cooldown = [Llmgateway.Cooldown.child_spec(window_ms: cooldown_ms(config))]
 
             # Validate copilot model IDs after /models list is fetched
             Task.start(fn ->
@@ -22,7 +23,7 @@ defmodule Llmgateway.Application do
               validate_copilot_models(config)
             end)
 
-            auth_servers ++ router ++ server
+            cooldown ++ auth_servers ++ router ++ server
 
           {:error, reason} ->
             Logger.warning("Failed to load config from #{config_path}: #{inspect(reason)}")
@@ -38,6 +39,10 @@ defmodule Llmgateway.Application do
 
     opts = [strategy: :one_for_one, name: Llmgateway.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp cooldown_ms(config) do
+    (get_in(config, ["settings", "cooldown_seconds"]) || 0) * 1000
   end
 
   defp maybe_start_server(config) do

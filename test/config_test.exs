@@ -103,6 +103,33 @@ defmodule Llmgateway.ConfigTest do
       File.rm("test/fixtures/config_missing_env.yaml")
     end
 
+    test "defaults cooldown_seconds to 60 when settings absent" do
+      assert {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
+      assert config["settings"]["cooldown_seconds"] == 60
+    end
+
+    test "parses settings cooldown_seconds (0 disables, positive honored)" do
+      yaml_path = Path.join(@fixtures_path, "config_settings.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+      models:
+        - name: test-model
+          provider: openai
+          model: gpt-4o-mini
+      settings:
+        cooldown_seconds: 0
+      """)
+
+      assert {:ok, config} = Config.load(yaml_path)
+      assert config["settings"]["cooldown_seconds"] == 0
+    after
+      File.rm("test/fixtures/config_settings.yaml")
+    end
+
     test "fails on missing file" do
       assert {:error, _} = Config.load("nonexistent.yaml")
     end

@@ -21,7 +21,7 @@ defmodule Llmgateway do
       }, key: "work-key")
   """
 
-  alias Llmgateway.{Fallback, Router}
+  alias Llmgateway.{Cooldown, Fallback, Provider, Router}
 
   @doc """
   Generate a chat completion.
@@ -117,7 +117,24 @@ defmodule Llmgateway do
   defp try_stream_fallback([fb_name | rest], body, opts) do
     case Router.resolve_model(fb_name, key: opts[:key]) do
       {:ok, deployment, _} ->
-        Llmgateway.Stream.call(deployment, body, opts)
+        if Cooldown.active?(deployment.provider_name, deployment.name) do
+          try_stream_fallback(rest, body, opts)
+        else
+          case Llmgateway.Stream.call(deployment, body, opts) do
+            {:ok, stream} ->
+              {:ok, stream}
+
+            {:error, %{type: _} = reason} ->
+              if Provider.retryable?(reason) do
+                Cooldown.record_failure(deployment.provider_name, deployment.name)
+              end
+
+              {:error, reason}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+        end
 
       {:error, :forbidden, _} ->
         try_stream_fallback(rest, body, opts)

@@ -9,6 +9,12 @@ server:
   #                               # Docker default: /config (same dir as this file)
   #                               # Local default: ~/.config/llmgateway
 
+# ── Settings ────────────────────────────────────────────────
+settings:
+  # After a model fails with a retryable error, skip it for this
+  # many seconds (0 disables the cooldown). Keyed by provider+model.
+  cooldown_seconds: 60
+
 # ── API Keys ────────────────────────────────────────────────
 # Virtual keys for authenticating clients to the proxy.
 # Models can be restricted to specific keys.

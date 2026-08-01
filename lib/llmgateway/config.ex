@@ -4,6 +4,10 @@ defmodule Llmgateway.Config do
   and enriches provider/model metadata from `llm_db`.
   """
 
+  # After a retryable failure, skip the {provider, model} pair for this many seconds.
+  # Reasonable default (60s); explicit 0 disables.
+  @default_cooldown_seconds 60
+
   @doc """
   Load and parse a config YAML file.
 
@@ -113,6 +117,7 @@ defmodule Llmgateway.Config do
         |> Map.put("models", enriched_models)
         |> Map.put("keys", normalize_key_list(config["keys"]))
         |> Map.put("fallbacks", normalize_fallbacks(config["fallbacks"]))
+        |> Map.put("settings", normalize_settings(config["settings"]))
 
       {:ok, config}
     end
@@ -131,6 +136,18 @@ defmodule Llmgateway.Config do
   defp normalize_fallbacks(nil), do: %{}
   defp normalize_fallbacks(map) when is_map(map), do: map
   defp normalize_fallbacks(_), do: %{}
+
+  defp normalize_settings(nil), do: %{"cooldown_seconds" => @default_cooldown_seconds}
+
+  defp normalize_settings(settings) when is_map(settings) do
+    %{"cooldown_seconds" => normalize_cooldown(settings["cooldown_seconds"])}
+  end
+
+  defp normalize_settings(_), do: %{"cooldown_seconds" => @default_cooldown_seconds}
+
+  defp normalize_cooldown(n) when is_integer(n) and n > 0, do: n
+  defp normalize_cooldown(n) when is_integer(n), do: 0
+  defp normalize_cooldown(_), do: @default_cooldown_seconds
 
   defp enrich_providers(providers) do
     providers
