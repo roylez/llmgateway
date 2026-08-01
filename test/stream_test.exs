@@ -102,4 +102,140 @@ defmodule Llmgateway.StreamTest do
       assert {:ok, ^event} = Llmgateway.Convert.stream_event_to_canonical(deployment, event)
     end
   end
+
+  describe "stream diagnostics" do
+    defp deployment do
+      %Llmgateway.Deployment{
+        name: "test",
+        provider_name: "openai-test",
+        provider_type: :openai,
+        upstream_model: "gpt-test",
+        api_key: "k",
+        base_url: "https://example.com",
+        context: 128_000,
+        output_limit: 16_384
+      }
+    end
+
+    defp chunks(items) do
+      Enum.reject(items, &(match?({:stream_stats, _}, &1) or &1 == :done))
+    end
+
+    test "empty stop yields zero-content stats and a diagnostics marker" do
+      body = """
+      data: {"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+      data: [DONE]
+
+      """
+
+      items = LlmStream.build_stream(body, deployment(), false, "rid1") |> Enum.to_list()
+
+      assert {:stream_stats, stats} = List.last(items)
+      assert stats.text_deltas == 0
+      assert stats.thinking_deltas == 0
+      assert stats.tool_deltas == 0
+      assert stats.finish == "stop"
+      assert stats.done == true
+      assert stats.decode_failures == 0
+      assert :done in items
+    end
+
+    test "text content is counted and forwarded in order" do
+      body = """
+      data: {"id":"x","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]}
+
+      data: {"id":"x","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":"stop"}]}
+
+      """
+
+      items = LlmStream.build_stream(body, deployment(), false, "rid2") |> Enum.to_list()
+
+      assert {:stream_stats, stats} = List.last(items)
+      assert stats.text_deltas == 2
+      assert stats.finish == "stop"
+
+      text =
+        items
+        |> chunks()
+        |> Enum.map(fn c -> get_in(c, ["choices", Access.at(0), "delta", "content"]) end)
+
+      assert text == ["Hello", " world"]
+    end
+
+    test "responses-format skipped events are tagged for diagnostics" do
+      body = """
+      data: {"type":"response.created","response":{"id":"r","model":"g","status":"in_progress"}}
+
+      data: {"type":"response.output_text.done","delta":"hello","sequence_number":2,"schema_name":"output_text_done"}
+
+      data: {"type":"response.reasoning_summary_text.delta","delta":"thinking","sequence_number":3,"schema_name":"reasoning_summary_text_delta"}
+
+      data: {"type":"response.completed","response":{"id":"r","model":"g","status":"completed"}}
+
+      """
+
+      items = LlmStream.build_stream(body, deployment(), true, "rid3") |> Enum.to_list()
+
+      assert {:stream_stats, stats} = List.last(items)
+
+      assert stats.skipped == %{
+               "response.output_text.done:output_text_done" => 1,
+               "response.reasoning_summary_text.delta:reasoning_summary_text_delta" => 1
+             }
+
+      # Only the created + completed events forward chunks.
+      assert stats.chunks == 2
+      assert stats.text_deltas == 0
+      assert stats.thinking_deltas == 0
+      assert stats.tool_deltas == 0
+    end
+
+    test "undecodable SSE lines are counted as failures and dropped" do
+      body = """
+      data: {not json
+
+      data: {"id":"x","choices":[{"index":0,"delta":{"content":"ok"}}]}
+
+      data: [DONE]
+
+      """
+
+      items = LlmStream.build_stream(body, deployment(), false, "rid4") |> Enum.to_list()
+
+      assert {:stream_stats, stats} = List.last(items)
+      assert stats.decode_failures == 1
+      assert stats.text_deltas == 1
+    end
+
+    test "log_stats warns on empty and reasoning-only streams, not on text" do
+      import ExUnit.CaptureLog
+
+      base = %{
+        chunks: 1,
+        text_deltas: 0,
+        thinking_deltas: 0,
+        tool_deltas: 0,
+        skipped: %{},
+        finish: "stop",
+        done: true,
+        decode_failures: 0,
+        bytes: 74,
+        tail: "{}"
+      }
+
+      for stats <- [base, %{base | thinking_deltas: 2}] do
+        output = capture_log(fn -> LlmStream.log_stats(deployment(), "rid9", stats, nil) end)
+        assert output =~ "warning", "expected a warning for #{inspect(stats)}"
+        assert output =~ "[stream-stats]"
+      end
+
+      ok_output =
+        capture_log(fn ->
+          LlmStream.log_stats(deployment(), "rid9", %{base | text_deltas: 3}, nil)
+        end)
+
+      refute ok_output =~ "warning"
+    end
+  end
 end

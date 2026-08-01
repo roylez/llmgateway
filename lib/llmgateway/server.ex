@@ -134,11 +134,17 @@ defmodule Llmgateway.Server do
   post "/messages" do
     body = conn.body_params
     key_name = conn.assigns[:key_name]
-    Logger.info("[anthropic-in] model=#{body["model"]} stream=#{body["stream"]} tools=#{length(body["tools"] || [])} key=#{key_name}")
+    rid = new_rid()
+
+    Logger.info(
+      "[anthropic-in] rid=#{rid} model=#{body["model"]} stream=#{body["stream"]} " <>
+        "tools=#{length(body["tools"] || [])} key=#{key_name}"
+    )
+
     canonical = Llmgateway.Convert.InboundAnthropic.to_canonical(body)
 
     if body["stream"] do
-      handle_anthropic_stream(conn, body["model"], canonical, key_name)
+      handle_anthropic_stream(conn, body["model"], canonical, key_name, rid)
     else
       handle_anthropic_completion(conn, body["model"], canonical, key_name)
     end
@@ -431,7 +437,9 @@ defmodule Llmgateway.Server do
   # ── Streaming ─────────────────────────────────────────────
 
   defp handle_stream(conn, model_name, body, key_name) do
-    case resolve_and_stream(model_name, body, key_name) do
+    rid = new_rid()
+
+    case resolve_and_stream(model_name, body, key_name, rid) do
       {:ok, stream, deployment} ->
         tel = Telemetry.request_start(deployment)
 
@@ -447,6 +455,12 @@ defmodule Llmgateway.Server do
         {conn, last_usage} =
           Enum.reduce_while(stream, {conn, nil}, fn
             :done, {conn, usage} ->
+              # Keep consuming: Llmgateway.Stream appends {:stream_stats, stats}
+              # as the terminal element, which carries the request diagnostics.
+              {:cont, {conn, usage}}
+
+            {:stream_stats, stats}, {conn, usage} ->
+              Llmgateway.Stream.log_stats(deployment, rid, stats, usage)
               {:halt, {conn, usage}}
 
             data, {conn, prev_usage} ->
@@ -485,69 +499,69 @@ defmodule Llmgateway.Server do
     end
   end
 
-  defp resolve_and_stream(model_name, body, key_name) do
+  defp resolve_and_stream(model_name, body, key_name, rid) do
     case Llmgateway.Router.resolve_model(model_name, key: key_name) do
       {:ok, deployment, fallbacks} ->
-        try_stream_with_fallbacks(deployment, fallbacks, body, key_name)
+        try_stream_with_fallbacks(deployment, fallbacks, body, key_name, rid)
 
       {:error, :not_found} ->
         {:error, %{type: :not_found}}
 
       {:error, :forbidden, fallbacks} ->
-        try_stream_fallback_list(fallbacks, body, key_name, [])
+        try_stream_fallback_list(fallbacks, body, key_name, [], rid)
 
       {:error, :forbidden} ->
         {:error, %{type: :forbidden}}
     end
   end
 
-  defp try_stream_with_fallbacks(deployment, fallbacks, body, key_name) do
-    case Llmgateway.Stream.call(deployment, body) do
+  defp try_stream_with_fallbacks(deployment, fallbacks, body, key_name, rid) do
+    case Llmgateway.Stream.call(deployment, body, rid: rid) do
       {:ok, stream} ->
         {:ok, stream, deployment}
 
       {:error, reason} when fallbacks != [] ->
         Logger.warning(
-          "Stream #{deployment.name} failed (reason: #{inspect(reason)}), trying fallbacks: #{inspect(fallbacks)}"
+          "rid=#{rid} Stream #{deployment.name} failed (reason: #{inspect(reason)}), trying fallbacks: #{inspect(fallbacks)}"
         )
 
-        try_stream_fallback_list(fallbacks, body, key_name, [{deployment.name, reason}])
+        try_stream_fallback_list(fallbacks, body, key_name, [{deployment.name, reason}], rid)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp try_stream_fallback_list([], _body, _key_name, errors) do
+  defp try_stream_fallback_list([], _body, _key_name, errors, _rid) do
     {:error, %{type: :all_failed, errors: Enum.reverse(errors)}}
   end
 
-  defp try_stream_fallback_list([fb_name | rest], body, key_name, errors) do
+  defp try_stream_fallback_list([fb_name | rest], body, key_name, errors, rid) do
     case Llmgateway.Router.resolve_model(fb_name, key: key_name) do
       {:ok, deployment, more_fallbacks} ->
         remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
-        Logger.debug("Stream trying #{fb_name}, remaining chain: #{inspect(remaining)}")
+        Logger.debug("rid=#{rid} Stream trying #{fb_name}, remaining chain: #{inspect(remaining)}")
 
-        case Llmgateway.Stream.call(deployment, body) do
+        case Llmgateway.Stream.call(deployment, body, rid: rid) do
           {:ok, stream} ->
             {:ok, stream, deployment}
 
           {:error, reason} ->
             Logger.warning(
-              "Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}"
+              "rid=#{rid} Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}"
             )
 
-            try_stream_fallback_list(remaining, body, key_name, [{fb_name, reason} | errors])
+            try_stream_fallback_list(remaining, body, key_name, [{fb_name, reason} | errors], rid)
         end
 
       {:error, :forbidden, more_fallbacks} ->
         remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
-        Logger.warning("Stream fallback #{fb_name} forbidden, remaining: #{inspect(remaining)}")
-        try_stream_fallback_list(remaining, body, key_name, [{fb_name, %{type: :forbidden}} | errors])
+        Logger.warning("rid=#{rid} Stream fallback #{fb_name} forbidden, remaining: #{inspect(remaining)}")
+        try_stream_fallback_list(remaining, body, key_name, [{fb_name, %{type: :forbidden}} | errors], rid)
 
       {:error, reason} ->
-        Logger.warning("Stream fallback #{fb_name} resolve failed: #{inspect(reason)}")
-        try_stream_fallback_list(rest, body, key_name, [{fb_name, %{type: :inaccessible}} | errors])
+        Logger.warning("rid=#{rid} Stream fallback #{fb_name} resolve failed: #{inspect(reason)}")
+        try_stream_fallback_list(rest, body, key_name, [{fb_name, %{type: :inaccessible}} | errors], rid)
     end
   end
 
@@ -579,8 +593,10 @@ defmodule Llmgateway.Server do
     end
   end
 
-  defp handle_anthropic_stream(conn, model_name, canonical_body, key_name) do
-    case resolve_and_stream(model_name, canonical_body, key_name) do
+  defp handle_anthropic_stream(conn, model_name, canonical_body, key_name, rid) do
+    started_at = System.monotonic_time(:millisecond)
+
+    case resolve_and_stream(model_name, canonical_body, key_name, rid) do
       {:ok, stream, deployment} ->
         conn =
           conn
@@ -590,21 +606,34 @@ defmodule Llmgateway.Server do
           |> put_resp_header("x-context-length", to_string(deployment.context || 0))
           |> send_chunked(200)
 
-        state = %{}
+        state = %{rid: rid, started_at: started_at}
 
         {conn, final_state} =
           Enum.reduce_while(stream, {conn, state}, fn
             :done, {conn, state} ->
+              # Keep consuming: {:stream_stats, stats} (with diagnostics) follows.
+              {:cont, {conn, state}}
+
+            {:stream_stats, stats}, {conn, state} ->
+              Llmgateway.Stream.log_stats(deployment, rid, stats, Map.get(state, :usage))
               {:halt, {conn, state}}
 
             chunk, {conn, state} ->
               case Llmgateway.Convert.InboundAnthropic.chunk_to_anthropic_events(chunk, state) do
                 {:ok, events, new_state} ->
-                  # Only log when events include something other than the high-frequency
-                  # content_block_delta text deltas, which would otherwise flood the debug log.
-                  if Enum.any?(events, &(&1["type"] != "content_block_delta")) do
-                    Logger.debug("[anthropic-stream] events=#{Enum.map_join(events, ", ", & &1["type"])}")
-                  end
+                  usage = chunk["usage"] || Map.get(state, :usage)
+                  new_state = Map.put(new_state, :usage, usage)
+
+                  # Permanent per-request trace. Lifecycle events (start/stop/message)
+                  # are :info so a broken stream is visible even with debug off;
+                  # high-frequency content_block_delta stays at :debug.
+                  Enum.each(events, fn event ->
+                    if event["type"] == "content_block_delta" do
+                      Logger.debug("[anthropic-stream] rid=#{rid} #{format_stream_event(event)}")
+                    else
+                      Logger.info("[anthropic-stream] rid=#{rid} #{format_stream_event(event)}")
+                    end
+                  end)
 
                   result =
                     Enum.reduce_while(events, {:ok, conn}, fn event, {:ok, c} ->
@@ -624,7 +653,14 @@ defmodule Llmgateway.Server do
               end
           end)
 
-        Logger.info("[anthropic-stream] finished blocks=#{final_state[:next_idx] || 0}")
+        took = System.monotonic_time(:millisecond) - (final_state[:started_at] || started_at)
+
+        Logger.info(
+          "[anthropic-stream] rid=#{rid} finished model=#{deployment.upstream_model} " <>
+            "deployment=#{deployment.name} blocks=#{final_state[:next_idx] || 0} " <>
+            "usage=#{inspect(Map.get(final_state, :usage))} ms=#{took}"
+        )
+
         conn
 
       {:error, %{type: :not_found}} ->
@@ -641,6 +677,39 @@ defmodule Llmgateway.Server do
       "error" => %{"type" => type, "message" => message}
     })
   end
+
+  # ── Tracing helpers ───────────────────────────────────────
+
+  # Compact, greppable request id shared across all logs for one request.
+  defp new_rid do
+    :crypto.strong_rand_bytes(4) |> Base.hex_encode32(case: :lower, padding: false)
+  end
+
+  defp format_stream_event(%{"type" => "message_start"} = ev) do
+    "event=message_start model=#{get_in(ev, ["message", "model"]) || "?"}"
+  end
+
+  defp format_stream_event(%{"type" => "content_block_start"} = ev) do
+    "event=content_block_start index=#{ev["index"]} type=#{get_in(ev, ["content_block", "type"]) || "?"}"
+  end
+
+  defp format_stream_event(%{"type" => "content_block_stop"} = ev) do
+    "event=content_block_stop index=#{ev["index"]}"
+  end
+
+  defp format_stream_event(%{"type" => "message_delta"} = ev) do
+    "event=message_delta stop_reason=#{get_in(ev, ["delta", "stop_reason"]) || "?"} usage=#{inspect(ev["usage"])}"
+  end
+
+  defp format_stream_event(%{"type" => "message_stop"}) do
+    "event=message_stop"
+  end
+
+  defp format_stream_event(%{"type" => "content_block_delta"} = ev) do
+    "event=content_block_delta index=#{ev["index"]} kind=#{get_in(ev, ["delta", "type"]) || "?"}"
+  end
+
+  defp format_stream_event(ev), do: "event=#{ev["type"]}"
 
   # ── Plugs ─────────────────────────────────────────────────
 
