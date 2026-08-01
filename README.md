@@ -53,33 +53,43 @@ Environment variables use `$VAR` syntax and are resolved at boot.
 
 ### Models
 
-Each model maps a local name to an upstream provider model. `name` is optional — defaults to the `model` value.
+Models are declared in provider groups. A group's `provider` and optional
+`keys` apply to every nested model. Each child can be a full mapping, an
+`name:model` alias, or a bare model ID (which becomes the public name).
+The first colon separates the public name from the upstream ID; subsequent
+colons remain part of the upstream ID.
 
 ```yaml
 models:
-  # Shorthand — clients request "deepseek/deepseek-chat"
   - provider: openrouter
-    model: deepseek/deepseek-chat
+    models:
+      # Bare model ID — clients request "deepseek/deepseek-chat"
+      - deepseek/deepseek-chat
+      # Alias shorthand — clients request "gpt-4o"
+      - gpt-4o:openai/gpt-4o
 
-  # Explicit name — clients request "gpt-4o"
-  - name: gpt-4o
-    provider: openai
-    model: gpt-4o
-    keys: [prod]          # restrict to specific keys
+  - provider: openai
+    keys: [prod]          # restrict every child to specific keys
+    models:
+      # Full mapping — explicit public name and upstream model ID
+      - name: gpt-4o-mini
+        model: gpt-4o-mini
 ```
 
-Same model name can appear multiple times with different providers and keys. The proxy picks the first deployment accessible by the current key:
+Same model name can appear in multiple groups with different providers and
+keys. The proxy picks the first deployment accessible by the current key:
 
 ```yaml
-  - name: deepseek
-    provider: openrouter-work
-    model: deepseek/deepseek-chat
+models:
+  - provider: openrouter-work
     keys: [work]
+    models:
+      - deepseek:deepseek/deepseek-chat
 
-  - name: deepseek
-    provider: openrouter
-    model: deepseek/deepseek-chat
+  - provider: openrouter
     keys: [personal]
+    models:
+      - deepseek:deepseek/deepseek-chat
 ```
 
 Model metadata (context length, output limits) is sourced from llmdb — no manual config needed.
@@ -213,9 +223,9 @@ providers:
     type: github_copilot
 
 models:
-  - name: copilot-gpt4o
-    provider: copilot
-    model: gpt-4o
+  - provider: copilot
+    models:
+      - copilot-gpt4o:gpt-4o
 ```
 
 On first request, the proxy initiates a GitHub device code flow:
