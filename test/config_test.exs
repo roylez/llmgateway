@@ -26,6 +26,17 @@ defmodule Llmgateway.ConfigTest do
       assert model.provider_type == :openai
       assert is_integer(model.context)
       assert model.context > 0
+
+      # Models enriched with endpoint paths from llm_db execution metadata
+      openrouter = Enum.find(config["models"], &(&1.name == "deepseek-v4-flash"))
+      assert openrouter.path == "/chat/completions"
+
+      openai = Enum.find(config["models"], &(&1.name == "gpt-4o-mini"))
+      assert openai.path == "/responses"
+
+      copilot = Enum.find(config["models"], &(&1.name == "copilot-test"))
+      assert copilot.provider_type == :github_copilot
+      assert copilot.path == nil
     end
 
     test "defaults model name to model ID when name omitted" do

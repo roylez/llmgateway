@@ -20,6 +20,9 @@ providers:
     type: openai
     api_key: test-openai-key
 
+  - name: copilot-main
+    type: github_copilot
+
 models:
   # Multi-deployment: same name, different providers and keys
   - name: deepseek-v4-flash
@@ -49,6 +52,10 @@ models:
     model: glm/glm-5-turbo
     keys:
       - personal-key
+
+  - name: copilot-test
+    provider: copilot-main
+    model: gpt-5.6-terra
 
 fallbacks:
   deepseek-v4-flash:

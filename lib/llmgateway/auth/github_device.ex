@@ -78,6 +78,19 @@ defmodule Llmgateway.Auth.GitHubDevice do
     GenServer.call(server, {:get_model_endpoint, model_id}, 5_000)
   end
 
+  @doc false
+  # Prefer a known non-websocket chat-style endpoint; never pick "ws:..." paths.
+  def select_endpoint(endpoints) when is_list(endpoints) do
+    http = Enum.reject(endpoints, &String.starts_with?(&1, "ws:"))
+
+    cond do
+      "/chat/completions" in http -> "/chat/completions"
+      "/v1/messages" in http -> "/v1/messages"
+      "/responses" in http -> "/responses"
+      true -> List.first(http) || "/chat/completions"
+    end
+  end
+
   @doc "List known model IDs from Copilot /models cache. Returns [] if not fetched yet."
   def list_known_models(server \\ __MODULE__) do
     GenServer.call(server, :list_known_models, 5_000)
@@ -180,17 +193,27 @@ defmodule Llmgateway.Auth.GitHubDevice do
 
   @impl true
   def handle_call({:get_model_endpoint, model_id}, _from, state) do
-    endpoints = (state.model_endpoints || %{})[model_id] || ["/chat/completions"]
+    endpoints = (state.model_endpoints || %{})[model_id]
 
-    # Prefer /chat/completions if available, otherwise first endpoint
-    endpoint =
-      cond do
-        "/chat/completions" in endpoints -> "/chat/completions"
-        "/v1/messages" in endpoints -> "/v1/messages"
-        true -> List.first(endpoints) || "/chat/completions"
+    if endpoints do
+      {:reply, select_endpoint(endpoints), state}
+    else
+      # Unknown model: refresh the cache once (fetch falls back to the disk
+      # cache on failure and leaves model_endpoints unchanged), then re-check.
+      refetched = fetch_model_endpoints(state)
+
+      case (refetched.model_endpoints || %{})[model_id] do
+        nil ->
+          Logger.warning(
+            "[#{refetched.provider_name}] endpoint unknown for model #{inspect(model_id)}; defaulting to /chat/completions"
+          )
+
+          {:reply, "/chat/completions", refetched}
+
+        endpoints ->
+          {:reply, select_endpoint(endpoints), refetched}
       end
-
-    {:reply, endpoint, state}
+    end
   end
 
   @impl true

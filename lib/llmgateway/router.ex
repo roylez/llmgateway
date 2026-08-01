@@ -240,7 +240,8 @@ defmodule Llmgateway.Router do
         api_key: provider.api_key,
         base_url: provider.base_url,
         context: model_config.context,
-        output_limit: model_config.output_limit
+        output_limit: model_config.output_limit,
+        path: model_config.path
       }
 
       {:ok, deployment}

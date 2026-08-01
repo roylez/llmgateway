@@ -180,10 +180,14 @@ defmodule Llmgateway.Config do
         upstream_model = resolve_upstream_model(provider.type, model_id)
         name = m["name"] || model_id
 
-        {context, output_limit} =
+        {context, output_limit, path} =
           case LLMDB.model({provider.type, upstream_model}) do
-            {:ok, md} -> {md.limits.context, md.limits.output}
-            _ -> {nil, nil}
+            {:ok, md} ->
+              path = get_in(md.execution, [:text, :path])
+              {md.limits.context, md.limits.output, path}
+
+            _ ->
+              {nil, nil, nil}
           end
 
         {:ok,
@@ -194,7 +198,8 @@ defmodule Llmgateway.Config do
            upstream_model: upstream_model,
            keys: m["keys"],
            context: context,
-           output_limit: output_limit
+           output_limit: output_limit,
+           path: path
          }}
       end
     end)

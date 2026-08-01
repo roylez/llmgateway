@@ -64,6 +64,7 @@ defmodule Llmgateway.Auth do
     end
   end
 
+  def request_path(%Deployment{path: path}) when is_binary(path), do: path
   def request_path(%Deployment{provider_type: :anthropic}), do: "/v1/messages"
   def request_path(%Deployment{}), do: "/chat/completions"
 end

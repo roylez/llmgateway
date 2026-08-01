@@ -21,7 +21,9 @@ defmodule Llmgateway.Deployment do
     # context limit from llm_db model metadata
     :context,
     # output limit from llm_db model metadata
-    :output_limit
+    :output_limit,
+    # request path from llm_db execution metadata (nil when unknown)
+    :path
   ]
 
   @type t :: %__MODULE__{
@@ -32,6 +34,7 @@ defmodule Llmgateway.Deployment do
           api_key: String.t() | nil,
           base_url: String.t(),
           context: non_neg_integer(),
-          output_limit: non_neg_integer()
+          output_limit: non_neg_integer(),
+          path: String.t() | nil
         }
 end

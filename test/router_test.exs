@@ -1,9 +1,24 @@
 defmodule Llmgateway.RouterTest do
   use ExUnit.Case
 
-  alias Llmgateway.{Config, Router}
+  alias Llmgateway.{Auth, Config, Deployment, Router}
 
   @fixtures_path "test/fixtures"
+
+  defp deployment(opts) do
+    base = %{
+      name: "m",
+      provider_name: "p",
+      provider_type: :openai,
+      upstream_model: "gpt-5.5",
+      api_key: nil,
+      base_url: "http://x",
+      context: 1,
+      output_limit: 1
+    }
+
+    %Deployment{} |> Map.merge(base) |> Map.merge(opts)
+  end
 
   setup do
     try do
@@ -119,6 +134,21 @@ defmodule Llmgateway.RouterTest do
       [model | _] = Router.list_models()
       assert is_map(model.limits)
       assert Map.has_key?(model.limits, :context)
+    end
+  end
+
+  describe "request_path/1" do
+    test "uses llmdb execution path when present" do
+      assert Auth.request_path(deployment(%{path: "/responses"})) == "/responses"
+    end
+
+    test "falls back to anthropic /v1/messages when no path" do
+      d = deployment(%{path: nil, provider_type: :anthropic})
+      assert Auth.request_path(d) == "/v1/messages"
+    end
+
+    test "defaults to /chat/completions otherwise" do
+      assert Auth.request_path(deployment(%{path: nil, provider_type: :openrouter})) == "/chat/completions"
     end
   end
 end
