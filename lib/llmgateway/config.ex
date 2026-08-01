@@ -89,16 +89,113 @@ defmodule Llmgateway.Config do
       end
 
     errors =
-      if config["models"] do
-        errors
-      else
-        ["missing 'models' section" | errors]
+      case validate_models(config["models"]) do
+        :ok -> errors
+        {:error, error} -> [error | errors]
       end
 
     if errors == [] do
       {:ok, config}
     else
       {:error, Enum.join(errors, "; ")}
+    end
+  end
+
+  defp validate_models(nil), do: {:error, "missing 'models' section"}
+  defp validate_models(models) when not is_list(models), do: {:error, "models must be a list"}
+
+  defp validate_models(models) do
+    Enum.reduce_while(models, :ok, fn model, :ok ->
+      case validate_model_entry(model) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_model_entry(entry) when not is_map(entry),
+    do: {:error, "model entry must define exactly one of 'model' or 'models'"}
+
+  defp validate_model_entry(entry) do
+    case {Map.has_key?(entry, "model"), Map.has_key?(entry, "models")} do
+      {true, true} -> {:error, "model entry must define exactly one of 'model' or 'models'"}
+      {true, false} -> validate_flat_model_entry(entry)
+      {false, true} -> validate_model_group(entry)
+      {false, false} -> {:error, "model entry must define exactly one of 'model' or 'models'"}
+    end
+  end
+
+  defp validate_flat_model_entry(entry) do
+    with :ok <- validate_model_id(entry["model"]),
+         :ok <- validate_optional_name(entry),
+         :ok <- validate_optional_keys(entry) do
+      :ok
+    end
+  end
+
+  defp validate_model_group(group) do
+    with :ok <- validate_group_provider(group["provider"]),
+         :ok <- validate_group_models(group["models"]),
+         :ok <- validate_optional_keys(group) do
+      :ok
+    end
+  end
+
+  defp validate_group_provider(provider) when is_binary(provider) and byte_size(provider) > 0,
+    do: :ok
+
+  defp validate_group_provider(_), do: {:error, "model group missing or invalid 'provider'"}
+
+  defp validate_group_models(models) when is_list(models) do
+    Enum.reduce_while(models, :ok, fn child, :ok ->
+      case validate_group_child(child) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_group_models(_), do: {:error, "model group missing or invalid 'models'"}
+
+  defp validate_group_child(child) when is_binary(child) do
+    case String.split(child, ":", parts: 2) do
+      [""] -> {:error, "model shorthand must be '<name>:<model>' or '<model>'"}
+      ["", _] -> {:error, "model shorthand must be '<name>:<model>' or '<model>'"}
+      [_, ""] -> {:error, "model shorthand must be '<name>:<model>' or '<model>'"}
+      _ -> :ok
+    end
+  end
+
+  defp validate_group_child(child) when is_map(child) do
+    if Map.has_key?(child, "provider") or Map.has_key?(child, "keys") do
+      {:error, "model group child must not define 'provider' or 'keys'"}
+    else
+      with :ok <- validate_model_id(child["model"]),
+           :ok <- validate_optional_name(child) do
+        :ok
+      end
+    end
+  end
+
+  defp validate_group_child(_), do: {:error, "model group child must be a mapping or string"}
+
+  defp validate_model_id(model) when is_binary(model) and byte_size(model) > 0, do: :ok
+  defp validate_model_id(_), do: {:error, "model entry missing or invalid 'model'"}
+
+  defp validate_optional_name(entry) do
+    case Map.fetch(entry, "name") do
+      :error -> :ok
+      {:ok, name} when is_binary(name) and byte_size(name) > 0 -> :ok
+      {:ok, _} -> {:error, "model entry has invalid 'name'"}
+    end
+  end
+
+  defp validate_optional_keys(entry) do
+    case Map.fetch(entry, "keys") do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, keys} when is_list(keys) -> :ok
+      {:ok, _} -> {:error, "model entry has invalid 'keys'"}
     end
   end
 
@@ -126,8 +223,38 @@ defmodule Llmgateway.Config do
   defp normalize_provider_list(list) when is_list(list), do: list
   defp normalize_provider_list(nil), do: []
 
-  defp normalize_model_list(list) when is_list(list), do: list
+  defp normalize_model_list(list) when is_list(list) do
+    Enum.flat_map(list, fn
+      %{"models" => models} = group ->
+        Enum.map(models, &normalize_group_child(&1, group["provider"], Map.get(group, "keys")))
+
+      model ->
+        [model]
+    end)
+  end
+
   defp normalize_model_list(nil), do: []
+
+  defp normalize_group_child(child, provider, keys) when is_map(child) do
+    %{
+      "name" => Map.get(child, "name"),
+      "provider" => provider,
+      "model" => child["model"],
+      "keys" => keys
+    }
+  end
+
+  defp normalize_group_child(child, provider, keys) do
+    {name, model} = normalize_group_model_string(child)
+    %{"name" => name, "provider" => provider, "model" => model, "keys" => keys}
+  end
+
+  defp normalize_group_model_string(child) do
+    case String.split(child, ":", parts: 2) do
+      [model] -> {model, model}
+      [name, model] -> {name, model}
+    end
+  end
 
   defp normalize_key_list(list) when is_list(list), do: list
   defp normalize_key_list(nil), do: []

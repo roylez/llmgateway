@@ -62,25 +62,31 @@ providers:
 
 # ── Models ──────────────────────────────────────────────────
 # Each model maps a local name to an upstream provider model.
-# `provider` references a named provider above.
-# `model` is the upstream model ID as the provider knows it.
-# `name` is optional — defaults to the `model` value if omitted.
-# `keys` restricts access — omit to allow all keys.
-#
 # Model metadata (context length, output limit, capabilities)
 # is sourced automatically from llmdb.xyz.
+#
+# Models sharing a provider and access restriction can be grouped. The
+# group-level `provider` and `keys` apply to every child. Child forms are:
+#   - full mapping: explicit `name` and `model`
+#   - `name:model`: alias shorthand
+#   - `model`: bare upstream ID, also used as the public name
+# The first colon separates the public name from the upstream ID; later
+# colons remain in the upstream ID. Use a full mapping if a public name
+# itself needs a colon.
 
 models:
-  # Shorthand — name defaults to "deepseek/deepseek-chat"
-  - provider: openrouter
-    model: deepseek/deepseek-chat
-
-  - name: deepseek-v3-work
-    provider: openrouter-work
-    model: deepseek/deepseek-chat
+  - provider: openrouter-work
     keys: [prod]
+    models:
+      # Full mapping: explicit public name and upstream ID.
+      - name: deepseek-v4-flash
+        model: deepseek/deepseek-v4-flash-0731
+      # Shorthand: public name followed by upstream ID.
+      - deepseek-v4-pro:deepseek/deepseek-v4-pro
+      # Bare model ID: use it as both public name and upstream ID.
+      - xiaomi/mimo-v2.5
 
-  # Direct provider models
+  # Flat mappings remain valid when a model needs its own provider or keys.
   - name: gpt-4o-mini
     provider: openai
     model: gpt-4o-mini

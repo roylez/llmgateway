@@ -20,19 +20,39 @@ defmodule Llmgateway.ConfigTest do
       assert openrouter.api_key == "test-openrouter-key"
       assert is_binary(openrouter.base_url)
 
-      # Models enriched with limits
-      model = Enum.find(config["models"], &(&1.name == "gpt-4o-mini"))
-      assert model.provider_name == "openai-main"
-      assert model.provider_type == :openai
-      assert is_integer(model.context)
-      assert model.context > 0
+      # Group children normalize to the existing enriched flat model shape.
+      full =
+        Enum.find(
+          config["models"],
+          &(&1.name == "deepseek-v4-flash" and &1.provider_name == "openrouter")
+        )
 
-      # Models enriched with endpoint paths from llm_db execution metadata
-      openrouter = Enum.find(config["models"], &(&1.name == "deepseek-v4-flash"))
-      assert openrouter.path == "/chat/completions"
+      assert full.upstream_model == "deepseek/deepseek-chat"
+      assert full.keys == ["work-key"]
+      assert full.path == "/chat/completions"
 
-      openai = Enum.find(config["models"], &(&1.name == "gpt-4o-mini"))
-      assert openai.path == "/responses"
+      shorthand =
+        Enum.find(
+          config["models"],
+          &(&1.name == "deepseek-v4-flash" and &1.provider_name == "openrouter-personal")
+        )
+
+      assert shorthand.upstream_model == "deepseek/deepseek-chat"
+      assert shorthand.keys == ["personal-key"]
+
+      bare = Enum.find(config["models"], &(&1.name == "gpt-4o-mini"))
+      assert bare.provider_name == "openai-main"
+      assert bare.provider_type == :openai
+      assert bare.upstream_model == "gpt-4o-mini"
+      assert bare.keys == nil
+      assert is_integer(bare.context)
+      assert bare.context > 0
+      assert bare.path == "/responses"
+
+      alias_model = Enum.find(config["models"], &(&1.name == "gpt-4o-alias"))
+      assert alias_model.upstream_model == "gpt-4o-mini"
+      assert alias_model.provider_name == "openai-main"
+      assert alias_model.keys == nil
 
       copilot = Enum.find(config["models"], &(&1.name == "copilot-test"))
       assert copilot.provider_type == :github_copilot
@@ -128,6 +148,44 @@ defmodule Llmgateway.ConfigTest do
       assert config["settings"]["cooldown_seconds"] == 0
     after
       File.rm("test/fixtures/config_settings.yaml")
+    end
+
+    test "rejects invalid grouped model declarations" do
+      for {models, error} <- [
+            {[
+               "- provider: openai",
+               "  models:",
+               "    - ':gpt-4o-mini'"
+             ], "model shorthand must be '<name>:<model>' or '<model>'"},
+            {[
+               "- provider: openai",
+               "  models:",
+               "    - 'gpt-4o-alias:'"
+             ], "model shorthand must be '<name>:<model>' or '<model>'"},
+            {[
+               "- provider: openai",
+               "  models:",
+               "    - model: gpt-4o-mini",
+               "      keys: [work]"
+             ], "model group child must not define 'provider' or 'keys'"},
+            {["provider: openai"], "models must be a list"}
+          ] do
+        yaml_path = Path.join(@fixtures_path, "invalid_grouped_models.yaml")
+
+        File.write!(yaml_path, [
+          "providers:\n",
+          "  - name: openai\n",
+          "    type: openai\n",
+          "    api_key: test-key\n",
+          "models:\n",
+          Enum.map_join(models, "\n", &"  #{&1}"),
+          "\n"
+        ])
+
+        assert {:error, ^error} = Config.load(yaml_path)
+      end
+    after
+      File.rm("test/fixtures/invalid_grouped_models.yaml")
     end
 
     test "fails on missing file" do

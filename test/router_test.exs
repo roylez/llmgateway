@@ -82,7 +82,9 @@ defmodule Llmgateway.RouterTest do
       {:ok, personal_deploy, _} = Router.resolve_model("deepseek-v4-flash", key: "personal-key")
 
       assert work_deploy.provider_name == "openrouter"
+      assert work_deploy.upstream_model == "deepseek/deepseek-chat"
       assert personal_deploy.provider_name == "openrouter-personal"
+      assert personal_deploy.upstream_model == "deepseek/deepseek-chat"
       assert work_deploy.name == personal_deploy.name
     end
 
@@ -107,6 +109,11 @@ defmodule Llmgateway.RouterTest do
 
       assert work_deepseek != nil
       assert personal_deepseek != nil
+    end
+
+    test "resolves an alias shorthand group child" do
+      assert {:ok, deployment, _} = Router.resolve_model("gpt-4o-alias")
+      assert deployment.upstream_model == "gpt-4o-mini"
     end
   end
 
@@ -148,7 +155,8 @@ defmodule Llmgateway.RouterTest do
     end
 
     test "defaults to /chat/completions otherwise" do
-      assert Auth.request_path(deployment(%{path: nil, provider_type: :openrouter})) == "/chat/completions"
+      assert Auth.request_path(deployment(%{path: nil, provider_type: :openrouter})) ==
+               "/chat/completions"
     end
   end
 end
