@@ -59,7 +59,7 @@ defmodule Llmgateway.ConfigTest do
       assert copilot.path == nil
     end
 
-    test "defaults model name to model ID when name omitted" do
+    test "uses a bare group child as its public name" do
       yaml_path = Path.join(@fixtures_path, "config_no_name.yaml")
 
       File.write!(yaml_path, """
@@ -69,7 +69,8 @@ defmodule Llmgateway.ConfigTest do
           api_key: test-key
       models:
         - provider: openai
-          model: gpt-4o-mini
+          models:
+            - gpt-4o-mini
       """)
 
       assert {:ok, config} = Config.load(yaml_path)
@@ -90,9 +91,9 @@ defmodule Llmgateway.ConfigTest do
           type: openai
           api_key: $TEST_LLM_KEY
       models:
-        - name: test-model
-          provider: test-provider
-          model: gpt-4o-mini
+        - provider: test-provider
+          models:
+            - test-model:gpt-4o-mini
       """)
 
       assert {:ok, config} = Config.load(yaml_path)
@@ -112,9 +113,9 @@ defmodule Llmgateway.ConfigTest do
           type: openai
           api_key: $DEFINITELY_NOT_SET_VAR_12345
       models:
-        - name: test-model
-          provider: test-provider
-          model: gpt-4o-mini
+        - provider: test-provider
+          models:
+            - test-model:gpt-4o-mini
       """)
 
       assert {:error, msg} = Config.load(yaml_path)
@@ -137,9 +138,9 @@ defmodule Llmgateway.ConfigTest do
           type: openai
           api_key: test-key
       models:
-        - name: test-model
-          provider: openai
-          model: gpt-4o-mini
+        - provider: openai
+          models:
+            - test-model:gpt-4o-mini
       settings:
         cooldown_seconds: 0
       """)
@@ -168,7 +169,12 @@ defmodule Llmgateway.ConfigTest do
                "    - model: gpt-4o-mini",
                "      keys: [work]"
              ], "model group child must not define 'provider' or 'keys'"},
-            {["provider: openai"], "models must be a list"}
+            {["provider: openai"], "models must be a list"},
+            {[
+               "- name: gpt-4o-mini",
+               "  provider: openai",
+               "  model: gpt-4o-mini"
+             ], "model entry must define a 'models' group"}
           ] do
         yaml_path = Path.join(@fixtures_path, "invalid_grouped_models.yaml")
 

@@ -65,8 +65,8 @@ providers:
 # Model metadata (context length, output limit, capabilities)
 # is sourced automatically from llmdb.xyz.
 #
-# Models sharing a provider and access restriction can be grouped. The
-# group-level `provider` and `keys` apply to every child. Child forms are:
+# Every top-level entry is a group: its `provider` and optional `keys`
+# apply to every child. Child forms are:
 #   - full mapping: explicit `name` and `model`
 #   - `name:model`: alias shorthand
 #   - `model`: bare upstream ID, also used as the public name
@@ -86,37 +86,26 @@ models:
       # Bare model ID: use it as both public name and upstream ID.
       - xiaomi/mimo-v2.5
 
-  # Flat mappings remain valid when a model needs its own provider or keys.
-  - name: gpt-4o-mini
-    provider: openai
-    model: gpt-4o-mini
+  - provider: openai
+    models:
+      - gpt-4o-mini
+      - gpt-4o
 
-  - name: gpt-4o
-    provider: openai
-    model: gpt-4o
-    keys: [prod]
-
-  - name: claude-sonnet
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-
-  - name: claude-haiku
-    provider: anthropic
-    model: claude-haiku-4-5-20251001
+  - provider: anthropic
+    models:
+      - claude-sonnet:claude-sonnet-4-20250514
+      - claude-haiku:claude-haiku-4-5-20251001
 
   # GitHub Copilot
-  - name: copilot-gpt4o
-    provider: copilot
-    model: gpt-4o
-
-  - name: copilot-claude
-    provider: copilot
-    model: claude-sonnet-4
+  - provider: copilot
+    models:
+      - copilot-gpt4o:gpt-4o
+      - copilot-claude:claude-sonnet-4
 
   # Local Ollama
-  - name: llama-local
-    provider: ollama
-    model: llama3.2
+  - provider: ollama
+    models:
+      - llama-local:llama3.2
 
 # ── Fallbacks ───────────────────────────────────────────────
 # When a model fails (5xx, timeout, rate limit), try the next

@@ -113,25 +113,10 @@ defmodule Llmgateway.Config do
     end)
   end
 
-  defp validate_model_entry(entry) when not is_map(entry),
-    do: {:error, "model entry must define exactly one of 'model' or 'models'"}
+  defp validate_model_entry(entry) when is_map(entry) and is_map_key(entry, "models"),
+    do: validate_model_group(entry)
 
-  defp validate_model_entry(entry) do
-    case {Map.has_key?(entry, "model"), Map.has_key?(entry, "models")} do
-      {true, true} -> {:error, "model entry must define exactly one of 'model' or 'models'"}
-      {true, false} -> validate_flat_model_entry(entry)
-      {false, true} -> validate_model_group(entry)
-      {false, false} -> {:error, "model entry must define exactly one of 'model' or 'models'"}
-    end
-  end
-
-  defp validate_flat_model_entry(entry) do
-    with :ok <- validate_model_id(entry["model"]),
-         :ok <- validate_optional_name(entry),
-         :ok <- validate_optional_keys(entry) do
-      :ok
-    end
-  end
+  defp validate_model_entry(_), do: {:error, "model entry must define a 'models' group"}
 
   defp validate_model_group(group) do
     with :ok <- validate_group_provider(group["provider"]),
@@ -224,12 +209,8 @@ defmodule Llmgateway.Config do
   defp normalize_provider_list(nil), do: []
 
   defp normalize_model_list(list) when is_list(list) do
-    Enum.flat_map(list, fn
-      %{"models" => models} = group ->
-        Enum.map(models, &normalize_group_child(&1, group["provider"], Map.get(group, "keys")))
-
-      model ->
-        [model]
+    Enum.flat_map(list, fn %{"models" => models} = group ->
+      Enum.map(models, &normalize_group_child(&1, group["provider"], Map.get(group, "keys")))
     end)
   end
 
