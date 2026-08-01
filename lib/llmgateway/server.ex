@@ -508,7 +508,7 @@ defmodule Llmgateway.Server do
 
       {:error, reason} when fallbacks != [] ->
         Logger.warning(
-          "Stream #{deployment.name} failed, trying fallbacks: #{inspect(fallbacks)}"
+          "Stream #{deployment.name} failed (reason: #{inspect(reason)}), trying fallbacks: #{inspect(fallbacks)}"
         )
 
         try_stream_fallback_list(fallbacks, body, key_name, [{deployment.name, reason}])

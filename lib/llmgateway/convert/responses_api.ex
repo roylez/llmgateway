@@ -144,6 +144,12 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     {system, rest}
   end
 
+  defp convert_input_message(%{"role" => "system", "content" => content}) when is_list(content) do
+    # Join content blocks into string (Responses API uses "instructions" for system)
+    text = content |> Enum.map_join("\n", &(&1["text"] || ""))
+    %{"role" => "developer", "content" => text}
+  end
+
   defp convert_input_message(%{"role" => "system", "content" => c}) do
     %{"role" => "developer", "content" => c}
   end
@@ -159,7 +165,29 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     %{"type" => "function_call_output", "call_id" => id, "output" => c || ""}
   end
 
+  defp convert_input_message(%{"role" => "user", "content" => content} = msg) when is_list(content) do
+    converted = Enum.map(content, &convert_content_block("user", &1))
+    %{msg | "content" => converted}
+  end
+
+  defp convert_input_message(%{"role" => "assistant", "content" => content} = msg)
+       when is_list(content) do
+    converted = Enum.map(content, &convert_content_block("assistant", &1))
+    %{msg | "content" => converted}
+  end
+
   defp convert_input_message(msg), do: msg
+
+  # Responses API uses "input_text"/"output_text" instead of "text"
+  defp convert_content_block("assistant", %{"type" => "text"} = block) do
+    Map.put(block, "type", "output_text")
+  end
+
+  defp convert_content_block(_role, %{"type" => "text"} = block) do
+    Map.put(block, "type", "input_text")
+  end
+
+  defp convert_content_block(_role, block), do: block
 
   defp convert_tools(result, nil), do: result
   defp convert_tools(result, []), do: result

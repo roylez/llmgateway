@@ -21,7 +21,6 @@ defmodule Llmgateway.Stream do
   def call(%Deployment{} = deployment, body, opts \\ []) do
     timeout = opts[:timeout] || 120_000
 
-
     {provider_body, _warnings} = Convert.to_provider(deployment, body)
 
     provider_body =
@@ -44,7 +43,6 @@ defmodule Llmgateway.Stream do
             else
               provider_body
             end
-
 
           case Req.post(req, url: url, json: request_body, into: :self) do
             {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
@@ -73,21 +71,13 @@ defmodule Llmgateway.Stream do
            }}
       end
 
-
     result
   end
 
   # ── SSE parsing ───────────────────────────────────────────
 
-  # Convert Req.Response.Async body into a stream of raw data binaries
-  defp to_sse_stream(body, _resp) when is_struct(body, Req.Response.Async) do
-    body
-  end
-
-  defp to_sse_stream(body, _resp) when is_binary(body) do
-    [body]
-  end
-
+  defp to_sse_stream(body, _resp) when is_struct(body, Req.Response.Async), do: body
+  defp to_sse_stream(body, _resp) when is_binary(body), do: [body]
   defp to_sse_stream(body, _resp), do: body
 
   @doc false
@@ -98,12 +88,10 @@ defmodule Llmgateway.Stream do
     |> Enum.map(&String.trim_leading(&1, "data: "))
   end
 
-  # Buffer partial lines across SSE chunks
   defp buffer_sse_lines(chunk, buffer) when is_binary(chunk) do
     combined = buffer <> chunk
     lines = String.split(combined, "\n")
 
-    # Last element may be partial — carry it as the new buffer
     {complete, [remainder]} = Enum.split(lines, -1)
 
     data_lines =
