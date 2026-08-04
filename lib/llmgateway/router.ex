@@ -5,19 +5,10 @@ defmodule Llmgateway.Router do
 
   ## Multi-deployment models
 
-  The same model name can appear multiple times with different providers
-  and key restrictions. Resolution picks the first deployment accessible
-  by the current key:
-
-      models:
-        - name: deepseek-v4-flash
-          provider: openrouter-work
-          keys: [work]
-        - name: deepseek-v4-flash
-          provider: openrouter
-          keys: [personal]
-
-  A request with `work` key gets the first entry; `personal` gets the second.
+  The same model name can have multiple deployments with different providers
+  and key restrictions. Resolution returns every accessible deployment by
+  descending group priority. Equal priorities retain YAML order. The default
+  resolver returns the first deployment from this ordered set.
   """
 
   use GenServer
@@ -32,13 +23,21 @@ defmodule Llmgateway.Router do
   end
 
   @doc """
-  Resolve a model name to a deployment.
+  Resolve a model name to its highest-priority accessible deployment.
 
-  When multiple deployments share a name, returns the first one accessible
-  by the given key. Returns `{:ok, %Deployment{}, fallbacks}` or `{:error, reason}`.
+  Returns `{:ok, %Deployment{}, fallbacks}` or `{:error, reason}`.
   """
   def resolve_model(name, opts \\ []) do
     GenServer.call(__MODULE__, {:resolve_model, name, opts}, 5_000)
+  end
+
+  @doc """
+  Resolve a model name to every accessible deployment in priority order.
+
+  Returns `{:ok, [%Deployment{}], fallbacks}` or `{:error, reason}`.
+  """
+  def resolve_deployments(name, opts \\ []) do
+    GenServer.call(__MODULE__, {:resolve_deployments, name, opts}, 5_000)
   end
 
   @doc "Resolve an API key token to a key name."
@@ -72,22 +71,22 @@ defmodule Llmgateway.Router do
 
   @impl true
   def handle_call({:resolve_model, name, opts}, _from, state) do
-    key_name = opts[:key]
-    fallbacks = find_fallbacks(name, state)
+    result = resolve_deployments(name, opts[:key], state)
 
-    case resolve(name, key_name, state) do
-      {:ok, deployment} ->
-        {:reply, {:ok, deployment, fallbacks}, state}
+    reply =
+      case result do
+        {:ok, [deployment | _], fallbacks} -> {:ok, deployment, fallbacks}
+        {:error, :not_found} -> {:error, :not_found}
+        {:error, :forbidden, fallbacks} -> {:error, :forbidden, fallbacks}
+        {:error, :forbidden} -> {:error, :forbidden}
+      end
 
-      :not_found ->
-        {:reply, {:error, :not_found}, state}
+    {:reply, reply, state}
+  end
 
-      :forbidden when fallbacks != [] ->
-        {:reply, {:error, :forbidden, fallbacks}, state}
-
-      :forbidden ->
-        {:reply, {:error, :forbidden}, state}
-    end
+  @impl true
+  def handle_call({:resolve_deployments, name, opts}, _from, state) do
+    {:reply, resolve_deployments(name, opts[:key], state), state}
   end
 
   @impl true
@@ -107,11 +106,11 @@ defmodule Llmgateway.Router do
     models =
       state.models
       |> Enum.flat_map(fn {name, configs} ->
-        case find_accessible(configs, key_name) do
-          nil ->
+        case configs |> find_accessible(key_name) |> order_by_priority() do
+          [] ->
             []
 
-          m ->
+          [m | _] ->
             [
               %{
                 id: name,
@@ -161,53 +160,43 @@ defmodule Llmgateway.Router do
 
   # ── Model resolution (pattern matching on key access) ────
 
-  # No model entries for this name
-  defp resolve(name, _key_name, %{models: models}) when not is_map_key(models, name),
-    do: :not_found
+  defp resolve_deployments(name, _key_name, %{models: models}) when not is_map_key(models, name),
+    do: {:error, :not_found}
 
-  # No key provided — take first unrestricted deployment
-  defp resolve(name, nil, state) do
-    case find_accessible(state.models[name], nil) do
-      nil ->
-        :forbidden
+  defp resolve_deployments(name, key_name, state) do
+    fallbacks = find_fallbacks(name, state)
 
-      config ->
+    deployments =
+      state.models
+      |> Map.fetch!(name)
+      |> find_accessible(key_name)
+      |> order_by_priority()
+      |> Enum.reduce_while({:ok, []}, fn config, {:ok, acc} ->
         case build_deployment(config, state) do
-          {:ok, _} = ok -> ok
-          {:error, _} -> :forbidden
+          {:ok, deployment} -> {:cont, {:ok, [deployment | acc]}}
+          {:error, _} -> {:halt, :forbidden}
         end
+      end)
+
+    case deployments do
+      {:ok, []} when fallbacks != [] -> {:error, :forbidden, fallbacks}
+      {:ok, []} -> {:error, :forbidden}
+      {:ok, deployments} -> {:ok, Enum.reverse(deployments), fallbacks}
+      :forbidden when fallbacks != [] -> {:error, :forbidden, fallbacks}
+      :forbidden -> {:error, :forbidden}
     end
-  end
-
-  # Key provided — find first deployment accessible by this key
-  defp resolve(name, key_name, state) do
-    case find_accessible(state.models[name], key_name) do
-      nil ->
-        :forbidden
-
-      config ->
-        case build_deployment(config, state) do
-          {:ok, _} = ok -> ok
-          {:error, _} -> :forbidden
-        end
-    end
-  end
-
-  defp find_accessible(configs, nil) do
-    Enum.find(configs, fn
-      %{keys: nil} -> true
-      %{keys: []} -> false
-      %{keys: _} -> false
-      _ -> true
-    end)
   end
 
   defp find_accessible(configs, key_name) do
-    Enum.find(configs, fn
+    Enum.filter(configs, fn
       %{keys: nil} -> true
-      %{keys: keys} when is_list(keys) -> key_name in keys
+      %{keys: keys} when is_list(keys) -> key_name != nil and key_name in keys
       _ -> true
     end)
+  end
+
+  defp order_by_priority(configs) do
+    Enum.sort_by(configs, & &1.priority, :desc)
   end
 
   # ── Deployment building ───────────────────────────────────

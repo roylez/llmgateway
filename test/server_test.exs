@@ -118,21 +118,19 @@ defmodule Llmgateway.ServerTest do
       assert conn.status == 404
     end
 
-    test "returns 403 for forbidden model" do
+    test "returns 403 after a forbidden fallback cycle" do
       conn =
         call(
           :post,
           "/v1/chat/completions",
           %{
-            "model" => "deepseek-v4-flash",
+            "model" => "work-only",
             "messages" => [%{"role" => "user", "content" => "hi"}]
           },
           [{"authorization", "Bearer test-personal-key-value"}]
         )
 
-      # deepseek-v4-flash restricted to work-key, but has fallback to gpt-4o-mini
-      # The fallback tries to call OpenAI for real, fails with transport error
-      assert conn.status in [403, 500, 502]
+      assert conn.status == 403
     end
 
     test "streaming fallback threads the client key to key-restricted models" do

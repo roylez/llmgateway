@@ -11,8 +11,8 @@ server:
 
 # ── Settings ────────────────────────────────────────────────
 settings:
-  # After a model fails with a retryable error, skip it for this
-  # many seconds (0 disables the cooldown). Keyed by provider+model.
+  # After a retryable failure, skip the failed provider and upstream model for
+  # this many seconds. Set 0 to disable cooldowns.
   cooldown_seconds: 60
 
 # ── API Keys ────────────────────────────────────────────────
@@ -65,8 +65,9 @@ providers:
 # Model metadata (context length, output limit, capabilities)
 # is sourced automatically from llmdb.xyz.
 #
-# Every top-level entry is a group: its `provider` and optional `keys`
-# apply to every child. Child forms are:
+# Every top-level entry is a group: its `provider`, optional `keys`, and optional
+# `priority` apply to every child. Higher priority values are tried first.
+# If priorities are equal or absent, YAML order applies. Child forms are:
 #   - full mapping: explicit `name` and `model`
 #   - `name:model`: alias shorthand
 #   - `model`: bare upstream ID, also used as the public name
@@ -77,6 +78,7 @@ providers:
 models:
   - provider: openrouter-work
     keys: [prod]
+    priority: 10
     models:
       # Full mapping: explicit public name and upstream ID.
       - name: deepseek-v4-flash
@@ -107,9 +109,9 @@ models:
     models:
       - llama-local:llama3.2
 
-# ── Fallbacks ───────────────────────────────────────────────
-# When a model fails (5xx, timeout, rate limit), try the next
-# model in the list. Key access is checked per-attempt.
+# Fallbacks use public model names. At each name, the proxy tries every
+# accessible deployment before it moves to the next named fallback. A retryable
+# error or cooldown advances to the next deployment. Key access is checked per attempt.
 
 fallbacks:
   deepseek/deepseek-chat: [claude-haiku, gpt-4o-mini]

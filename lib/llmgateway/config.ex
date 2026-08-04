@@ -121,7 +121,8 @@ defmodule Llmgateway.Config do
   defp validate_model_group(group) do
     with :ok <- validate_group_provider(group["provider"]),
          :ok <- validate_group_models(group["models"]),
-         :ok <- validate_optional_keys(group) do
+         :ok <- validate_optional_keys(group),
+         :ok <- validate_optional_priority(group) do
       :ok
     end
   end
@@ -152,13 +153,18 @@ defmodule Llmgateway.Config do
   end
 
   defp validate_group_child(child) when is_map(child) do
-    if Map.has_key?(child, "provider") or Map.has_key?(child, "keys") do
-      {:error, "model group child must not define 'provider' or 'keys'"}
-    else
-      with :ok <- validate_model_id(child["model"]),
-           :ok <- validate_optional_name(child) do
-        :ok
-      end
+    cond do
+      Map.has_key?(child, "provider") or Map.has_key?(child, "keys") ->
+        {:error, "model group child must not define 'provider' or 'keys'"}
+
+      Map.has_key?(child, "priority") ->
+        {:error, "model group child must not define 'priority'"}
+
+      true ->
+        with :ok <- validate_model_id(child["model"]),
+             :ok <- validate_optional_name(child) do
+          :ok
+        end
     end
   end
 
@@ -181,6 +187,15 @@ defmodule Llmgateway.Config do
       {:ok, nil} -> :ok
       {:ok, keys} when is_list(keys) -> :ok
       {:ok, _} -> {:error, "model entry has invalid 'keys'"}
+    end
+  end
+
+  defp validate_optional_priority(group) do
+    case Map.fetch(group, "priority") do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, priority} when is_integer(priority) -> :ok
+      {:ok, _} -> {:error, "model group has invalid 'priority'"}
     end
   end
 
@@ -210,24 +225,37 @@ defmodule Llmgateway.Config do
 
   defp normalize_model_list(list) when is_list(list) do
     Enum.flat_map(list, fn %{"models" => models} = group ->
-      Enum.map(models, &normalize_group_child(&1, group["provider"], Map.get(group, "keys")))
+      priority = group["priority"] || 0
+
+      Enum.map(
+        models,
+        &normalize_group_child(&1, group["provider"], Map.get(group, "keys"), priority)
+      )
     end)
   end
 
   defp normalize_model_list(nil), do: []
 
-  defp normalize_group_child(child, provider, keys) when is_map(child) do
+  defp normalize_group_child(child, provider, keys, priority) when is_map(child) do
     %{
       "name" => Map.get(child, "name"),
       "provider" => provider,
       "model" => child["model"],
-      "keys" => keys
+      "keys" => keys,
+      "priority" => priority
     }
   end
 
-  defp normalize_group_child(child, provider, keys) do
+  defp normalize_group_child(child, provider, keys, priority) do
     {name, model} = normalize_group_model_string(child)
-    %{"name" => name, "provider" => provider, "model" => model, "keys" => keys}
+
+    %{
+      "name" => name,
+      "provider" => provider,
+      "model" => model,
+      "keys" => keys,
+      "priority" => priority
+    }
   end
 
   defp normalize_group_model_string(child) do
@@ -322,6 +350,7 @@ defmodule Llmgateway.Config do
            provider_type: provider.type,
            upstream_model: upstream_model,
            keys: m["keys"],
+           priority: m["priority"],
            context: context,
            output_limit: output_limit,
            path: path

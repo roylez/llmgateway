@@ -29,6 +29,7 @@ defmodule Llmgateway.ConfigTest do
 
       assert full.upstream_model == "deepseek/deepseek-chat"
       assert full.keys == ["work-key"]
+      assert full.priority == 0
       assert full.path == "/chat/completions"
 
       shorthand =
@@ -78,6 +79,29 @@ defmodule Llmgateway.ConfigTest do
       assert model.name == "gpt-4o-mini"
     after
       File.rm("test/fixtures/config_no_name.yaml")
+    end
+
+    test "inherits group priority for every child" do
+      yaml_path = Path.join(@fixtures_path, "config_model_priority.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+      models:
+        - provider: openai
+          priority: 10
+          models:
+            - high-priority:gpt-4o-mini
+            - name: another-high-priority
+              model: gpt-4o
+      """)
+
+      assert {:ok, config} = Config.load(yaml_path)
+      assert Enum.all?(config["models"], &(&1.priority == 10))
+    after
+      File.rm("test/fixtures/config_model_priority.yaml")
     end
 
     test "resolves $VAR from environment" do
@@ -192,6 +216,26 @@ defmodule Llmgateway.ConfigTest do
       end
     after
       File.rm("test/fixtures/invalid_grouped_models.yaml")
+    end
+
+    test "rejects a non-integer model group priority" do
+      yaml_path = Path.join(@fixtures_path, "invalid_model_priority.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+      models:
+        - provider: openai
+          priority: high
+          models:
+            - gpt-4o-mini
+      """)
+
+      assert {:error, "model group has invalid 'priority'"} = Config.load(yaml_path)
+    after
+      File.rm("test/fixtures/invalid_model_priority.yaml")
     end
 
     test "fails on missing file" do

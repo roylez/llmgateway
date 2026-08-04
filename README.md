@@ -76,21 +76,26 @@ models:
         model: gpt-4o-mini
 ```
 
-Same model name can appear in multiple groups with different providers and
-keys. The proxy picks the first deployment accessible by the current key:
+The same public model name can appear in multiple groups. Each group can have
+`priority`. The proxy tries accessible deployments from highest to lowest
+priority. If priorities match or are absent, it uses YAML order.
 
 ```yaml
 models:
-  - provider: openrouter-work
-    keys: [work]
+  - provider: openrouter
+    keys: [personal]
+    priority: 10
     models:
       - deepseek:deepseek/deepseek-chat
 
-  - provider: openrouter
+  - provider: deepseek
     keys: [personal]
     models:
-      - deepseek:deepseek/deepseek-chat
+      - deepseek:deepseek-chat
 ```
+
+In this example, a `personal` request tries OpenRouter first. After a retryable
+failure or cooldown, it tries the direct DeepSeek deployment.
 
 Model metadata (context length, output limits) is sourced from llmdb — no manual config needed.
 
@@ -110,13 +115,20 @@ Omit the `keys` section entirely to allow unauthenticated access.
 
 ### Fallbacks
 
-When a deployment fails with a retryable error, try the next model in the chain. Key access is checked per-attempt — a fallback can succeed even if the primary model is restricted.
+Fallbacks use public model names. At each chain position, the proxy tries all
+accessible deployments for that name before it moves to the next named fallback.
+It skips cooling deployments and continues after retryable provider errors. A
+non-retryable provider error stops the chain. Key access is checked per attempt.
 
 ```yaml
 fallbacks:
-  gpt-4o: [claude-sonnet, deepseek/deepseek-chat]
+  gpt-4o: [claude-sonnet, deepseek]
   "*": [gpt-4o-mini]              # catch-all
 ```
+
+For this example, the proxy tries every accessible `gpt-4o` deployment. It then
+tries every accessible `claude-sonnet` deployment, followed by `deepseek`.
+Nested fallback names are added after the remaining configured fallback names.
 
 ## API Endpoints
 

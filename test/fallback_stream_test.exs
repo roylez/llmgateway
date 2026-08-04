@@ -1,7 +1,8 @@
 defmodule Llmgateway.FallbackStreamTest.Executor do
   def call(deployment, body, opts) do
-    send(self(), {:stream_call, deployment.name, body, opts})
-    Process.get(:stream_results) |> Map.fetch!(deployment.name)
+    identity = {deployment.provider_name, deployment.upstream_model}
+    send(self(), {:stream_call, identity, body, opts})
+    Process.get(:stream_results) |> Map.fetch!(identity)
   end
 end
 
@@ -19,75 +20,87 @@ defmodule Llmgateway.FallbackStreamTest do
     :ok
   end
 
-  test "uses a fallback stream after a retryable primary failure" do
+  test "retries a same-name deployment before the named fallback" do
     body = %{"messages" => [%{"role" => "user", "content" => "hi"}]}
 
     Process.put(:stream_results, %{
-      "deepseek-v4-flash" => {:error, %{type: :server_error, message: "down"}},
-      "gpt-4o-mini" => {:ok, [:fallback_stream]}
+      {"openrouter-personal", "deepseek/deepseek-chat"} =>
+        {:error, %{type: :server_error, message: "down"}},
+      {"openai-main", "gpt-4o-mini"} => {:ok, [:sibling_stream]}
     })
 
-    assert {:ok, [:fallback_stream], deployment} =
+    assert {:ok, [:sibling_stream], deployment} =
              Fallback.stream("deepseek-v4-flash", body,
-               key: "work-key",
+               key: "personal-key",
                rid: "request-1",
                timeout: 4_000,
                executor: Llmgateway.FallbackStreamTest.Executor
              )
 
-    assert deployment.name == "gpt-4o-mini"
-    assert_receive {:stream_call, "deepseek-v4-flash", ^body, primary_opts}
+    assert {deployment.provider_name, deployment.upstream_model} ==
+             {"openai-main", "gpt-4o-mini"}
+
+    assert_receive {:stream_call, {"openrouter-personal", "deepseek/deepseek-chat"}, ^body,
+                    primary_opts}
+
     assert primary_opts[:rid] == "request-1"
     assert primary_opts[:timeout] == 4_000
-    assert_receive {:stream_call, "gpt-4o-mini", ^body, fallback_opts}
-    assert fallback_opts[:rid] == "request-1"
-    assert fallback_opts[:timeout] == 4_000
+
+    assert_receive {:stream_call, {"openai-main", "gpt-4o-mini"}, ^body, sibling_opts}
+    assert sibling_opts[:rid] == "request-1"
+    assert sibling_opts[:timeout] == 4_000
   end
 
-  test "reports every cooling deployment in the fallback chain" do
-    Cooldown.record_failure("openrouter", "deepseek-v4-flash")
-    Cooldown.record_failure("openai-main", "gpt-4o-mini")
+  test "skips a cooling candidate and tries its sibling" do
+    Cooldown.record_failure("openrouter-personal", "deepseek/deepseek-chat")
 
-    assert {:error, %{type: :all_failed, errors: errors}} =
+    Process.put(:stream_results, %{
+      {"openai-main", "gpt-4o-mini"} => {:ok, [:sibling_stream]}
+    })
+
+    assert {:ok, [:sibling_stream], %{provider_name: "openai-main"}} =
              Fallback.stream("deepseek-v4-flash", %{},
-               key: "work-key",
+               key: "personal-key",
                executor: Llmgateway.FallbackStreamTest.Executor
              )
 
-    assert errors == [
-             {"deepseek-v4-flash", %{type: :cooling}},
-             {"gpt-4o-mini", %{type: :cooling}}
-           ]
-
-    refute_received {:stream_call, _, _, _}
+    assert_receive {:stream_call, {"openai-main", "gpt-4o-mini"}, %{}, _}
+    refute_received {:stream_call, {"openrouter-personal", "deepseek/deepseek-chat"}, _, _}
   end
 
   test "stops after a non-retryable provider failure" do
     Process.put(:stream_results, %{
-      "deepseek-v4-flash" => {:error, %{type: :unknown_error, message: "bad request"}}
+      {"openrouter-personal", "deepseek/deepseek-chat"} =>
+        {:error, %{type: :unknown_error, message: "bad request"}}
     })
 
     assert {:error, %{type: :unknown_error, message: "bad request"}} =
              Fallback.stream("deepseek-v4-flash", %{},
-               key: "work-key",
+               key: "personal-key",
                executor: Llmgateway.FallbackStreamTest.Executor
              )
 
-    assert_receive {:stream_call, "deepseek-v4-flash", %{}, _}
-    refute_received {:stream_call, "gpt-4o-mini", _, _}
+    assert_receive {:stream_call, {"openrouter-personal", "deepseek/deepseek-chat"}, %{}, _}
+    refute_received {:stream_call, _, _, _}
   end
 
-  test "does not retry duplicate names from nested fallback chains" do
+  test "expands same-name candidates at each fallback position" do
     GenServer.stop(Router)
 
     config = %{
       "providers" => [
-        %{name: "provider", api_key: nil, base_url: "https://example.test"}
+        %{name: "primary-a", api_key: nil, base_url: "https://example.test"},
+        %{name: "primary-b", api_key: nil, base_url: "https://example.test"},
+        %{name: "secondary-a", api_key: nil, base_url: "https://example.test"},
+        %{name: "secondary-b", api_key: nil, base_url: "https://example.test"},
+        %{name: "tertiary-a", api_key: nil, base_url: "https://example.test"}
       ],
       "models" => [
-        model("primary"),
-        model("secondary"),
-        model("tertiary")
+        model("primary", "primary-a", "primary-a-model", 10),
+        model("primary", "primary-b", "primary-b-model", 0),
+        model("secondary", "secondary-a", "secondary-a-model", 10),
+        model("secondary", "secondary-b", "secondary-b-model", 0),
+        model("tertiary", "tertiary-a", "tertiary-a-model", 0)
       ],
       "keys" => [],
       "fallbacks" => %{
@@ -99,26 +112,31 @@ defmodule Llmgateway.FallbackStreamTest do
     {:ok, _pid} = Router.start_link(config)
 
     Process.put(:stream_results, %{
-      "primary" => {:error, %{type: :server_error}},
-      "secondary" => {:error, %{type: :transport_error}},
-      "tertiary" => {:ok, [:tertiary_stream]}
+      {"primary-a", "primary-a-model"} => {:error, %{type: :server_error}},
+      {"primary-b", "primary-b-model"} => {:error, %{type: :transport_error}},
+      {"secondary-a", "secondary-a-model"} => {:error, %{type: :server_error}},
+      {"secondary-b", "secondary-b-model"} => {:error, %{type: :transport_error}},
+      {"tertiary-a", "tertiary-a-model"} => {:ok, [:tertiary_stream]}
     })
 
     assert {:ok, [:tertiary_stream], %{name: "tertiary"}} =
              Fallback.stream("primary", %{}, executor: Llmgateway.FallbackStreamTest.Executor)
 
-    assert_receive {:stream_call, "primary", %{}, _}
-    assert_receive {:stream_call, "secondary", %{}, _}
-    assert_receive {:stream_call, "tertiary", %{}, _}
+    assert_receive {:stream_call, {"primary-a", "primary-a-model"}, %{}, _}
+    assert_receive {:stream_call, {"primary-b", "primary-b-model"}, %{}, _}
+    assert_receive {:stream_call, {"secondary-a", "secondary-a-model"}, %{}, _}
+    assert_receive {:stream_call, {"secondary-b", "secondary-b-model"}, %{}, _}
+    assert_receive {:stream_call, {"tertiary-a", "tertiary-a-model"}, %{}, _}
     refute_received {:stream_call, _, _, _}
   end
 
-  defp model(name) do
+  defp model(name, provider_name, upstream_model, priority) do
     %{
       name: name,
-      provider_name: "provider",
+      provider_name: provider_name,
       provider_type: :openai,
-      upstream_model: name,
+      upstream_model: upstream_model,
+      priority: priority,
       context: 1,
       output_limit: 1,
       path: "/chat/completions",

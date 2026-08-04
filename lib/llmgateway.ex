@@ -35,13 +35,12 @@ defmodule Llmgateway do
   def generate_text(model, body, opts \\ []) do
     key_name = opts[:key]
 
-    case Router.resolve_model(model, key: key_name) do
-      {:ok, deployment, fallbacks} ->
-        Fallback.call_with_fallback(deployment, fallbacks, body, opts)
+    case Router.resolve_deployments(model, key: key_name) do
+      {:ok, deployments, fallbacks} ->
+        Fallback.call_with_fallback(deployments, fallbacks, body, opts)
 
       {:error, :forbidden, fallbacks} ->
-        # Primary is forbidden but fallbacks exist — try them directly
-        try_fallback_only(fallbacks, body, opts)
+        try_fallback_only(fallbacks, body, opts, MapSet.new([model]))
 
       {:error, :not_found} ->
         {:error, %{type: :not_found, message: "Model '#{model}' not found"}}
@@ -87,21 +86,26 @@ defmodule Llmgateway do
     Router.resolve_key(token)
   end
 
-  defp try_fallback_only([], _body, _opts) do
+  defp try_fallback_only([], _body, _opts, _seen) do
     {:error, %{type: :forbidden, message: "No accessible fallbacks"}}
   end
 
-  defp try_fallback_only([fb_name | rest], body, opts) do
-    case Router.resolve_model(fb_name, key: opts[:key]) do
-      {:ok, deployment, more_fallbacks} ->
-        Fallback.call_with_fallback(deployment, more_fallbacks ++ rest, body, opts)
+  defp try_fallback_only([fb_name | rest], body, opts, seen) do
+    if MapSet.member?(seen, fb_name) do
+      try_fallback_only(rest, body, opts, seen)
+    else
+      seen = MapSet.put(seen, fb_name)
 
-      {:error, :forbidden, _} ->
-        try_fallback_only(rest, body, opts)
+      case Router.resolve_deployments(fb_name, key: opts[:key]) do
+        {:ok, deployments, more_fallbacks} ->
+          Fallback.call_with_fallback(deployments, rest ++ more_fallbacks, body, opts)
 
-      {:error, _} ->
-        try_fallback_only(rest, body, opts)
+        {:error, :forbidden, nested} ->
+          try_fallback_only(rest ++ nested, body, opts, seen)
+
+        {:error, _} ->
+          try_fallback_only(rest, body, opts, seen)
+      end
     end
   end
-
 end

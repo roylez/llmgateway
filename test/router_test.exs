@@ -60,6 +60,31 @@ defmodule Llmgateway.RouterTest do
     end
   end
 
+  describe "resolve_deployments/2" do
+    test "returns all accessible deployments in descending priority order" do
+      assert {:ok, deployments, _fallbacks} =
+               Router.resolve_deployments("deepseek-v4-flash", key: "personal-key")
+
+      assert Enum.map(deployments, &{&1.provider_name, &1.upstream_model}) == [
+               {"openrouter-personal", "deepseek/deepseek-chat"},
+               {"openai-main", "gpt-4o-mini"}
+             ]
+
+      assert {:ok, first, _fallbacks} =
+               Router.resolve_model("deepseek-v4-flash", key: "personal-key")
+
+      assert {first.provider_name, first.upstream_model} ==
+               {"openrouter-personal", "deepseek/deepseek-chat"}
+    end
+
+    test "retains YAML order for equal priorities" do
+      assert {:ok, deployments, _fallbacks} =
+               Router.resolve_deployments("tied-model", key: "personal-key")
+
+      assert Enum.map(deployments, & &1.provider_name) == ["openai-main", "openrouter-personal"]
+    end
+  end
+
   describe "key-based access control" do
     test "model with no keys is accessible by any key" do
       assert {:ok, _deployment, _} = Router.resolve_model("gpt-4o-mini", key: "work-key")

@@ -10,21 +10,22 @@ defmodule Llmgateway.CooldownTest do
     :ok
   end
 
-  test "unit: start inactive, become cooling after record_failure, per {provider, model}" do
-    assert Cooldown.active?("openrouter", "deepseek-v4-flash") == false
-    Cooldown.record_failure("openrouter", "deepseek-v4-flash")
-    assert Cooldown.active?("openrouter", "deepseek-v4-flash") == true
-    # same model name, different provider, stays inactive
-    assert Cooldown.active?("openai-main", "deepseek-v4-flash") == false
+  test "unit: start inactive, become cooling after record_failure, per {provider, upstream model}" do
+    assert Cooldown.active?("openrouter", "deepseek/deepseek-chat") == false
+    Cooldown.record_failure("openrouter", "deepseek/deepseek-chat")
+    assert Cooldown.active?("openrouter", "deepseek/deepseek-chat") == true
+    # The same upstream model on a different provider stays active.
+    assert Cooldown.active?("openai-main", "deepseek/deepseek-chat") == false
   end
 
   test "skips cooling-down deployments without calling a provider" do
     # primary deepseek-v4-flash (openrouter) + fallback gpt-4o-mini (openai-main)
-    Cooldown.record_failure("openrouter", "deepseek-v4-flash")
+    Cooldown.record_failure("openrouter", "deepseek/deepseek-chat")
     Cooldown.record_failure("openai-main", "gpt-4o-mini")
 
     assert {:error, %{type: :all_failed, errors: errors}} =
-             Llmgateway.generate_text("deepseek-v4-flash",
+             Llmgateway.generate_text(
+               "deepseek-v4-flash",
                %{"messages" => [%{"role" => "user", "content" => "hi"}]},
                key: "work-key"
              )
