@@ -23,8 +23,7 @@ defmodule Llmgateway.Server do
 
   require Logger
 
-  alias Llmgateway.{Cooldown, Provider, Telemetry}
-
+  alias Llmgateway.{Fallback, Telemetry}
 
   plug(Plug.Logger, log: :debug)
   plug(:parse_body)
@@ -38,6 +37,7 @@ defmodule Llmgateway.Server do
   get "/health" do
     send_json(conn, 200, %{"status" => "ok"})
   end
+
   head "/api/hello" do
     send_json(conn, 200, %{})
   end
@@ -201,38 +201,38 @@ defmodule Llmgateway.Server do
   # ── Stubs: not-implemented POST routes ─────────────────────
 
   post "/embeddings" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   post "/audio/speech" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   post "/audio/transcriptions" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   post "/images/generations" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   post "/images/edits" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   post "/rerank" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   # ── Stubs: collection resources (list/create/get/delete) ──
 
   # Files
   get "/files" do
-    send_json(conn, 200, %{"object" => "list", "data" => []})
+    empty_list(conn)
   end
 
   post "/files" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   get "/files/:id" do
@@ -249,11 +249,11 @@ defmodule Llmgateway.Server do
 
   # Batches
   get "/batches" do
-    send_json(conn, 200, %{"object" => "list", "data" => []})
+    empty_list(conn)
   end
 
   post "/batches" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   get "/batches/:id" do
@@ -266,11 +266,11 @@ defmodule Llmgateway.Server do
 
   # Fine-tuning
   get "/fine_tuning/jobs" do
-    send_json(conn, 200, %{"object" => "list", "data" => []})
+    empty_list(conn)
   end
 
   post "/fine_tuning/jobs" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   get "/fine_tuning/jobs/:id" do
@@ -283,11 +283,11 @@ defmodule Llmgateway.Server do
 
   # Assistants
   get "/assistants" do
-    send_json(conn, 200, %{"object" => "list", "data" => []})
+    empty_list(conn)
   end
 
   post "/assistants" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   get "/assistants/:id" do
@@ -304,11 +304,11 @@ defmodule Llmgateway.Server do
 
   # Responses
   get "/responses" do
-    send_json(conn, 200, %{"object" => "list", "data" => []})
+    empty_list(conn)
   end
 
   post "/responses" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   get "/responses/:id" do
@@ -324,16 +324,16 @@ defmodule Llmgateway.Server do
   end
 
   post "/responses/compact" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   # Threads
   get "/threads" do
-    send_json(conn, 200, %{"object" => "list", "data" => []})
+    empty_list(conn)
   end
 
   post "/threads" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   get "/threads/:id" do
@@ -366,15 +366,15 @@ defmodule Llmgateway.Server do
 
   # Realtime
   get "/realtime" do
-    send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+    not_implemented(conn)
   end
 
   get "/realtime/calls" do
-    send_json(conn, 200, %{"object" => "list", "data" => []})
+    empty_list(conn)
   end
 
   get "/realtime/client_secrets" do
-    send_json(conn, 200, %{"object" => "list", "data" => []})
+    empty_list(conn)
   end
 
   # ── Catch-all ─────────────────────────────────────────────
@@ -439,7 +439,7 @@ defmodule Llmgateway.Server do
   defp handle_stream(conn, model_name, body, key_name) do
     rid = new_rid()
 
-    case resolve_and_stream(model_name, body, key_name, rid) do
+    case Fallback.stream(model_name, body, key: key_name, rid: rid) do
       {:ok, stream, deployment} ->
         tel = Telemetry.request_start(deployment)
 
@@ -499,97 +499,6 @@ defmodule Llmgateway.Server do
     end
   end
 
-  defp resolve_and_stream(model_name, body, key_name, rid) do
-    case Llmgateway.Router.resolve_model(model_name, key: key_name) do
-      {:ok, deployment, fallbacks} ->
-        try_stream_with_fallbacks(deployment, fallbacks, body, key_name, rid)
-
-      {:error, :not_found} ->
-        {:error, %{type: :not_found}}
-
-      {:error, :forbidden, fallbacks} ->
-        try_stream_fallback_list(fallbacks, body, key_name, [], rid)
-
-      {:error, :forbidden} ->
-        {:error, %{type: :forbidden}}
-    end
-  end
-
-  defp try_stream_with_fallbacks(deployment, fallbacks, body, key_name, rid) do
-    if Cooldown.active?(deployment.provider_name, deployment.name) and fallbacks != [] do
-      Logger.info("Stream deployment #{deployment.name} cooling down; skipping to fallbacks")
-
-      try_stream_fallback_list(fallbacks, body, key_name, [
-        {deployment.name, %{type: :cooling}}
-      ], rid)
-    else
-      case Llmgateway.Stream.call(deployment, body, rid: rid) do
-        {:ok, stream} ->
-          {:ok, stream, deployment}
-
-        {:error, reason} when fallbacks != [] ->
-          Logger.warning(
-            "rid=#{rid} Stream #{deployment.name} failed (reason: #{inspect(reason)}), trying fallbacks: #{inspect(fallbacks)}"
-          )
-
-          if Provider.retryable?(reason) do
-            Cooldown.record_failure(deployment.provider_name, deployment.name)
-          end
-
-          try_stream_fallback_list(fallbacks, body, key_name, [{deployment.name, reason}], rid)
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
-  end
-
-  defp try_stream_fallback_list([], _body, _key_name, errors, _rid) do
-    {:error, %{type: :all_failed, errors: Enum.reverse(errors)}}
-  end
-
-  defp try_stream_fallback_list([fb_name | rest], body, key_name, errors, rid) do
-    case Llmgateway.Router.resolve_model(fb_name, key: key_name) do
-      {:ok, deployment, more_fallbacks} ->
-        remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
-
-        if Cooldown.active?(deployment.provider_name, deployment.name) do
-          Logger.debug("rid=#{rid} Stream skipping fallback #{fb_name} (cooling down)")
-
-          try_stream_fallback_list(remaining, body, key_name, [
-            {fb_name, %{type: :cooling}}
-          | errors], rid)
-        else
-          Logger.debug("rid=#{rid} Stream trying #{fb_name}, remaining chain: #{inspect(remaining)}")
-
-          case Llmgateway.Stream.call(deployment, body, rid: rid) do
-            {:ok, stream} ->
-              {:ok, stream, deployment}
-
-            {:error, reason} ->
-              Logger.warning(
-                "rid=#{rid} Stream fallback #{fb_name} failed: #{inspect(reason)}, remaining: #{inspect(remaining)}"
-              )
-
-              if Provider.retryable?(reason) do
-                Cooldown.record_failure(deployment.provider_name, deployment.name)
-              end
-
-              try_stream_fallback_list(remaining, body, key_name, [{fb_name, reason} | errors], rid)
-          end
-        end
-
-      {:error, :forbidden, more_fallbacks} ->
-        remaining = Enum.uniq(rest ++ more_fallbacks) -- [fb_name]
-        Logger.warning("rid=#{rid} Stream fallback #{fb_name} forbidden, remaining: #{inspect(remaining)}")
-        try_stream_fallback_list(remaining, body, key_name, [{fb_name, %{type: :forbidden}} | errors], rid)
-
-      {:error, reason} ->
-        Logger.warning("rid=#{rid} Stream fallback #{fb_name} resolve failed: #{inspect(reason)}")
-        try_stream_fallback_list(rest, body, key_name, [{fb_name, %{type: :inaccessible}} | errors], rid)
-    end
-  end
-
   # ── Anthropic-format handlers ─────────────────────────────
 
   defp handle_anthropic_completion(conn, model_name, canonical_body, key_name) do
@@ -621,7 +530,7 @@ defmodule Llmgateway.Server do
   defp handle_anthropic_stream(conn, model_name, canonical_body, key_name, rid) do
     started_at = System.monotonic_time(:millisecond)
 
-    case resolve_and_stream(model_name, canonical_body, key_name, rid) do
+    case Fallback.stream(model_name, canonical_body, key: key_name, rid: rid) do
       {:ok, stream, deployment} ->
         conn =
           conn
@@ -629,6 +538,7 @@ defmodule Llmgateway.Server do
           |> put_resp_header("cache-control", "no-cache")
           |> put_resp_header("connection", "keep-alive")
           |> put_resp_header("x-context-length", to_string(deployment.context || 0))
+          |> put_resp_header("x-model-name", deployment.upstream_model)
           |> send_chunked(200)
 
         state = %{rid: rid, started_at: started_at}
@@ -821,6 +731,11 @@ defmodule Llmgateway.Server do
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(body))
   end
+
+  defp empty_list(conn), do: send_json(conn, 200, %{"object" => "list", "data" => []})
+
+  defp not_implemented(conn),
+    do: send_json(conn, 501, error_body("Not implemented", "not_implemented"))
 
   defp put_context_header(conn, model_name, key_name) do
     case Llmgateway.Router.resolve_model(model_name, key: key_name) do

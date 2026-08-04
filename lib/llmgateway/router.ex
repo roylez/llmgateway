@@ -143,15 +143,13 @@ defmodule Llmgateway.Router do
       |> Enum.group_by(& &1.name)
 
     keys = build_key_map(config["keys"])
-    model_key_map = build_model_key_map(config["models"], keys)
     fallbacks = config["fallbacks"] || []
 
     %{
       providers: providers,
       models: models,
       keys: keys,
-      fallbacks: fallbacks,
-      model_key_map: model_key_map
+      fallbacks: fallbacks
     }
   end
 
@@ -160,18 +158,6 @@ defmodule Llmgateway.Router do
   end
 
   defp build_key_map(nil), do: %{}
-
-  defp build_model_key_map(models, _keys) do
-    Enum.reduce(models, %{_any: MapSet.new()}, fn m, acc ->
-      if m.keys do
-        Enum.reduce(m.keys, acc, fn key_name, inner_acc ->
-          Map.update(inner_acc, key_name, MapSet.new([m.name]), &MapSet.put(&1, m.name))
-        end)
-      else
-        Map.update(acc, :_any, MapSet.new([m.name]), &MapSet.put(&1, m.name))
-      end
-    end)
-  end
 
   # ── Model resolution (pattern matching on key access) ────
 

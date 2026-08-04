@@ -26,21 +26,9 @@ defmodule Llmgateway.Provider do
       |> Map.put("model", deployment.upstream_model)
       |> Map.delete("_llmgateway")
 
-    base_req = Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
-
     result =
-      case Auth.add_headers(base_req, deployment) do
-        {:ok, req} ->
-          url = Auth.request_path(deployment)
-
-          # Convert to Responses API format if endpoint is /responses
-          {request_body, is_responses} =
-            if url == "/responses" do
-              {ResponsesAPI.to_responses(provider_body), true}
-            else
-              {provider_body, false}
-            end
-
+      case Auth.prepare_request(deployment, provider_body, timeout) do
+        {:ok, req, url, request_body, is_responses} ->
           req
           |> Req.post(url: url, json: request_body)
           |> handle_response(deployment, warnings, is_responses)

@@ -21,7 +21,7 @@ defmodule Llmgateway do
       }, key: "work-key")
   """
 
-  alias Llmgateway.{Cooldown, Fallback, Provider, Router}
+  alias Llmgateway.{Fallback, Router}
 
   @doc """
   Generate a chat completion.
@@ -58,20 +58,14 @@ defmodule Llmgateway do
   Stream a chat completion. Returns `{:ok, stream}` where stream yields OpenAI chunks.
   """
   def stream_text(model, body, opts \\ []) do
-    key_name = opts[:key]
+    case Fallback.stream(model, body, opts) do
+      {:ok, stream, _deployment} ->
+        {:ok, stream}
 
-    case Router.resolve_model(model, key: key_name) do
-      {:ok, deployment, _fallbacks} ->
-        Llmgateway.Stream.call(deployment, body, opts)
-
-      {:error, :not_found} ->
+      {:error, %{type: :not_found}} ->
         {:error, %{type: :not_found, message: "Model '#{model}' not found"}}
 
-      {:error, :forbidden, fallbacks} ->
-        # Try fallbacks for streaming too
-        try_stream_fallback(fallbacks, body, opts)
-
-      {:error, :forbidden} ->
+      {:error, %{type: :forbidden}} ->
         {:error, %{type: :forbidden, message: "Key does not have access to model '#{model}'"}}
 
       {:error, reason} ->
@@ -110,37 +104,4 @@ defmodule Llmgateway do
     end
   end
 
-  defp try_stream_fallback([], _body, _opts) do
-    {:error, %{type: :forbidden, message: "No accessible fallbacks"}}
-  end
-
-  defp try_stream_fallback([fb_name | rest], body, opts) do
-    case Router.resolve_model(fb_name, key: opts[:key]) do
-      {:ok, deployment, _} ->
-        if Cooldown.active?(deployment.provider_name, deployment.name) do
-          try_stream_fallback(rest, body, opts)
-        else
-          case Llmgateway.Stream.call(deployment, body, opts) do
-            {:ok, stream} ->
-              {:ok, stream}
-
-            {:error, %{type: _} = reason} ->
-              if Provider.retryable?(reason) do
-                Cooldown.record_failure(deployment.provider_name, deployment.name)
-              end
-
-              {:error, reason}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        end
-
-      {:error, :forbidden, _} ->
-        try_stream_fallback(rest, body, opts)
-
-      {:error, _} ->
-        try_stream_fallback(rest, body, opts)
-    end
-  end
 end

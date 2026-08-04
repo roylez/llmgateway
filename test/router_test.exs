@@ -159,4 +159,29 @@ defmodule Llmgateway.RouterTest do
                "/chat/completions"
     end
   end
+
+  describe "prepare_request/3" do
+    test "converts the body only for a responses deployment" do
+      body = %{
+        "model" => "gpt-5.5",
+        "messages" => [%{"role" => "user", "content" => "Hello"}]
+      }
+
+      assert {:ok, _req, "/responses", request_body, true} =
+               Auth.prepare_request(deployment(%{path: "/responses"}), body, 5_000)
+
+      assert request_body["input"] == [%{"role" => "user", "content" => "Hello"}]
+      refute Map.has_key?(request_body, "messages")
+    end
+
+    test "keeps the provider body for a chat completions deployment" do
+      body = %{
+        "model" => "gpt-5.5",
+        "messages" => [%{"role" => "user", "content" => "Hello"}]
+      }
+
+      assert {:ok, _req, "/chat/completions", ^body, false} =
+               Auth.prepare_request(deployment(%{path: "/chat/completions"}), body, 5_000)
+    end
+  end
 end

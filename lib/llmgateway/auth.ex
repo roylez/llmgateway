@@ -1,12 +1,41 @@
 defmodule Llmgateway.Auth do
   @moduledoc """
-  Shared auth and request path helpers for provider dispatch.
-  Used by both Provider (non-streaming) and Stream (streaming).
+  Shared upstream request preparation, authentication, and path helpers.
+
+  `prepare_request/3` is the boundary between provider-specific request mutation
+  and the common upstream request setup used by `Provider` and `Stream`.
   """
 
   require Logger
 
   alias Llmgateway.Deployment
+
+  alias Llmgateway.Convert.ResponsesAPI
+
+  @doc """
+  Prepare an authenticated request for an upstream deployment.
+
+  The caller supplies the provider-native request body after its request-specific
+  mutations. This function resolves the endpoint and converts only `/responses`
+  request bodies.
+  """
+  def prepare_request(%Deployment{} = deployment, provider_body, timeout) do
+    base_req = Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
+
+    case add_headers(base_req, deployment) do
+      {:ok, req} ->
+        url = request_path(deployment)
+        is_responses = url == "/responses"
+
+        request_body =
+          if is_responses, do: ResponsesAPI.to_responses(provider_body), else: provider_body
+
+        {:ok, req, url, request_body, is_responses}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   @doc """
   Add auth headers to a Req request based on deployment provider type.

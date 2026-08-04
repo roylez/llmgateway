@@ -29,28 +29,18 @@ defmodule Llmgateway.Stream do
       |> Map.put("stream", true)
       |> Map.delete("_llmgateway")
 
-    base_req = Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
-
     result =
-      case Auth.add_headers(base_req, deployment) do
-        {:ok, req} ->
-          url = Auth.request_path(deployment)
-          is_responses = url == "/responses"
-
-          request_body =
-            if is_responses do
-              ResponsesAPI.to_responses(provider_body)
-            else
-              provider_body
-            end
-
+      case Auth.prepare_request(deployment, provider_body, timeout) do
+        {:ok, req, url, request_body, is_responses} ->
           Logger.debug(
             "[stream] rid=#{opts[:rid] || "-"} send url=#{url} model=#{deployment.upstream_model}"
           )
 
           case Req.post(req, url: url, json: request_body, into: :self) do
             {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
-              stream = Llmgateway.Stream.build_stream(resp.body, deployment, is_responses, opts[:rid])
+              stream =
+                Llmgateway.Stream.build_stream(resp.body, deployment, is_responses, opts[:rid])
+
               {:ok, stream}
 
             {:ok, %Req.Response{status: status, body: body}} ->
