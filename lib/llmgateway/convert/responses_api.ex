@@ -233,7 +233,8 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     %{"type" => "function_call_output", "call_id" => id, "output" => c || ""}
   end
 
-  defp convert_input_message(%{"role" => "user", "content" => content} = msg) when is_list(content) do
+  defp convert_input_message(%{"role" => "user", "content" => content} = msg)
+       when is_list(content) do
     converted = Enum.map(content, &convert_content_block("user", &1))
     %{msg | "content" => converted}
   end

@@ -34,7 +34,6 @@ defmodule Llmgateway.Application do
         []
       end
 
-
     Llmgateway.Telemetry.attach_default_logger()
 
     opts = [strategy: :one_for_one, name: Llmgateway.Supervisor]

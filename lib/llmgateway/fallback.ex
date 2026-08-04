@@ -18,6 +18,12 @@ defmodule Llmgateway.Fallback do
   def call_with_fallback(deployments, fallback_names, body, opts \\ [])
 
   def call_with_fallback([deployment | _] = deployments, fallback_names, body, opts) do
+    seen =
+      opts
+      |> Keyword.get(:seen, [])
+      |> MapSet.new()
+      |> MapSet.put(deployment.name)
+
     run_candidates(
       deployments,
       fallback_names,
@@ -25,7 +31,7 @@ defmodule Llmgateway.Fallback do
       opts,
       deployment.name,
       [],
-      MapSet.new([deployment.name]),
+      seen,
       {:call, opts[:executor] || Provider}
     )
   end
@@ -98,7 +104,8 @@ defmodule Llmgateway.Fallback do
           success(result, deployment, original, errors, mode)
 
         {:error, reason} when is_map(reason) ->
-          if Provider.retryable?(reason) do
+          if Provider.retryable?(reason) and
+               (rest != [] or remaining != [] or match?({:stream, _}, mode)) do
             log_failure(candidate, reason, remaining, opts, mode)
             Cooldown.record_failure(deployment.provider_name, deployment.upstream_model)
 
@@ -170,7 +177,7 @@ defmodule Llmgateway.Fallback do
   end
 
   defp execute(deployment, body, opts, {kind, executor}) when kind in [:call, :stream] do
-    executor.call(deployment, body, Keyword.drop(opts, [:executor]))
+    executor.call(deployment, body, Keyword.drop(opts, [:executor, :seen]))
   end
 
   defp success(response, _deployment, _original, [], {:call, _}), do: {:ok, response}

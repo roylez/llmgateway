@@ -205,58 +205,76 @@ defmodule Llmgateway.Convert.InboundAnthropic do
           end
 
         {events, text_open, next_idx, open_tool_ath_idx, tool_index_map} =
-          Enum.reduce(delta["tool_calls"], {events, text_open, next_idx, open_tool_ath_idx, tool_index_map}, fn tc, {evts, t_open, n_idx, o_tool_ath, t_map} ->
-            oa_idx = tc["index"]
+          Enum.reduce(
+            delta["tool_calls"],
+            {events, text_open, next_idx, open_tool_ath_idx, tool_index_map},
+            fn tc, {evts, t_open, n_idx, o_tool_ath, t_map} ->
+              oa_idx = tc["index"]
 
-            if tc["id"] do
-              # New tool call — close preceding blocks if open
-              evts =
-                if t_open do
-                  text_stop_idx = n_idx - 1
-                  evts ++ [%{"type" => "content_block_stop", "index" => text_stop_idx}]
-                else
-                  evts
-                end
+              if tc["id"] do
+                # New tool call — close preceding blocks if open
+                evts =
+                  if t_open do
+                    text_stop_idx = n_idx - 1
+                    evts ++ [%{"type" => "content_block_stop", "index" => text_stop_idx}]
+                  else
+                    evts
+                  end
 
-              {evts, _o_tool_ath} =
-                case o_tool_ath do
-                  nil -> {evts, nil}
-                  idx -> {evts ++ [%{"type" => "content_block_stop", "index" => idx}], nil}
-                end
-              ath_idx = n_idx
+                {evts, _o_tool_ath} =
+                  case o_tool_ath do
+                    nil -> {evts, nil}
+                    idx -> {evts ++ [%{"type" => "content_block_stop", "index" => idx}], nil}
+                  end
 
-              block_start = %{
-                "type" => "content_block_start",
-                "index" => ath_idx,
-                "content_block" => %{
-                  "type" => "tool_use",
-                  "id" => tc["id"],
-                  "name" => get_in(tc, ["function", "name"]) || "",
-                  "input" => %{}
+                ath_idx = n_idx
+
+                block_start = %{
+                  "type" => "content_block_start",
+                  "index" => ath_idx,
+                  "content_block" => %{
+                    "type" => "tool_use",
+                    "id" => tc["id"],
+                    "name" => get_in(tc, ["function", "name"]) || "",
+                    "input" => %{}
+                  }
                 }
-              }
 
-              t_map = Map.put(t_map, oa_idx, ath_idx)
+                t_map = Map.put(t_map, oa_idx, ath_idx)
 
-              # If arguments came in the same chunk, emit them as a delta
-              args = sanitize_args(get_in(tc, ["function", "arguments"]) || "")
-              events = if args != "", do: evts ++ [block_start, %{"type" => "content_block_delta", "index" => ath_idx, "delta" => %{"type" => "input_json_delta", "partial_json" => args}}], else: evts ++ [block_start]
+                # If arguments came in the same chunk, emit them as a delta
+                args = sanitize_args(get_in(tc, ["function", "arguments"]) || "")
 
-              {events, false, n_idx + 1, ath_idx, t_map}
-            else
-              # Argument delta for existing tool
-              args = sanitize_args(get_in(tc, ["function", "arguments"]) || "")
-              ath_idx = Map.get(t_map, oa_idx, oa_idx)
+                events =
+                  if args != "",
+                    do:
+                      evts ++
+                        [
+                          block_start,
+                          %{
+                            "type" => "content_block_delta",
+                            "index" => ath_idx,
+                            "delta" => %{"type" => "input_json_delta", "partial_json" => args}
+                          }
+                        ],
+                    else: evts ++ [block_start]
 
-              arg_delta = %{
-                "type" => "content_block_delta",
-                "index" => ath_idx,
-                "delta" => %{"type" => "input_json_delta", "partial_json" => args}
-              }
+                {events, false, n_idx + 1, ath_idx, t_map}
+              else
+                # Argument delta for existing tool
+                args = sanitize_args(get_in(tc, ["function", "arguments"]) || "")
+                ath_idx = Map.get(t_map, oa_idx, oa_idx)
 
-              {evts ++ [arg_delta], t_open, n_idx, o_tool_ath, t_map}
+                arg_delta = %{
+                  "type" => "content_block_delta",
+                  "index" => ath_idx,
+                  "delta" => %{"type" => "input_json_delta", "partial_json" => args}
+                }
+
+                {evts ++ [arg_delta], t_open, n_idx, o_tool_ath, t_map}
+              end
             end
-          end)
+          )
 
         {events, thinking_open, text_open, next_idx, open_tool_ath_idx, tool_index_map}
       else

@@ -305,7 +305,11 @@ defmodule Llmgateway.InboundAnthropicTest do
       }
 
       assert {:ok, events, _state} =
-               InboundAnthropic.chunk_to_anthropic_events(chunk, %{started: true, text_open: true, next_idx: 1})
+               InboundAnthropic.chunk_to_anthropic_events(chunk, %{
+                 started: true,
+                 text_open: true,
+                 next_idx: 1
+               })
 
       types = Enum.map(events, & &1["type"])
       assert "content_block_stop" in types
@@ -323,11 +327,28 @@ defmodule Llmgateway.InboundAnthropicTest do
 
     test "reasoning_content becomes thinking block" do
       chunks = [
-        %{"id" => "c1", "model" => "m", "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
-        %{"choices" => [%{"delta" => %{"reasoning_content" => "Let me think"}, "finish_reason" => nil}]},
-        %{"choices" => [%{"delta" => %{"reasoning_content" => " about this"}, "finish_reason" => nil}]},
-        %{"choices" => [%{"delta" => %{"content" => "The answer is 42"}, "finish_reason" => nil}]},
-        %{"choices" => [%{"delta" => %{}, "finish_reason" => "stop"}], "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}}
+        %{
+          "id" => "c1",
+          "model" => "m",
+          "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]
+        },
+        %{
+          "choices" => [
+            %{"delta" => %{"reasoning_content" => "Let me think"}, "finish_reason" => nil}
+          ]
+        },
+        %{
+          "choices" => [
+            %{"delta" => %{"reasoning_content" => " about this"}, "finish_reason" => nil}
+          ]
+        },
+        %{
+          "choices" => [%{"delta" => %{"content" => "The answer is 42"}, "finish_reason" => nil}]
+        },
+        %{
+          "choices" => [%{"delta" => %{}, "finish_reason" => "stop"}],
+          "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}
+        }
       ]
 
       {all_events, _final_state} =
@@ -345,15 +366,20 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert List.last(block_starts)["content_block"]["type"] == "text"
       assert List.last(block_starts)["index"] == 1
 
-      thinking_deltas = Enum.filter(all_events, fn e ->
-        e["type"] == "content_block_delta" && e["delta"]["type"] == "thinking_delta"
-      end)
+      thinking_deltas =
+        Enum.filter(all_events, fn e ->
+          e["type"] == "content_block_delta" && e["delta"]["type"] == "thinking_delta"
+        end)
+
       assert length(thinking_deltas) == 2
       assert Enum.all?(thinking_deltas, &(&1["index"] == 0))
-      assert Enum.map_join(thinking_deltas, "", & &1["delta"]["thinking"]) == "Let me think about this"
+
+      assert Enum.map_join(thinking_deltas, "", & &1["delta"]["thinking"]) ==
+               "Let me think about this"
 
       # Thinking block closed before text block opens
       event_types = Enum.map(all_events, & &1["type"])
+
       blocks_with_idx =
         all_events
         |> Enum.with_index()
@@ -372,11 +398,20 @@ defmodule Llmgateway.InboundAnthropicTest do
 
     test "bare reasoning key becomes thinking block (deepseek-style)" do
       chunks = [
-        %{"id" => "c1", "model" => "m", "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
+        %{
+          "id" => "c1",
+          "model" => "m",
+          "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]
+        },
         %{"choices" => [%{"delta" => %{"reasoning" => "Let me think"}, "finish_reason" => nil}]},
         %{"choices" => [%{"delta" => %{"reasoning" => " about this"}, "finish_reason" => nil}]},
-        %{"choices" => [%{"delta" => %{"content" => "The answer is 42"}, "finish_reason" => nil}]},
-        %{"choices" => [%{"delta" => %{}, "finish_reason" => "stop"}], "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}}
+        %{
+          "choices" => [%{"delta" => %{"content" => "The answer is 42"}, "finish_reason" => nil}]
+        },
+        %{
+          "choices" => [%{"delta" => %{}, "finish_reason" => "stop"}],
+          "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}
+        }
       ]
 
       {all_events, _final_state} =
@@ -394,12 +429,16 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert List.last(block_starts)["content_block"]["type"] == "text"
       assert List.last(block_starts)["index"] == 1
 
-      thinking_deltas = Enum.filter(all_events, fn e ->
-        e["type"] == "content_block_delta" && e["delta"]["type"] == "thinking_delta"
-      end)
+      thinking_deltas =
+        Enum.filter(all_events, fn e ->
+          e["type"] == "content_block_delta" && e["delta"]["type"] == "thinking_delta"
+        end)
+
       assert length(thinking_deltas) == 2
       assert Enum.all?(thinking_deltas, &(&1["index"] == 0))
-      assert Enum.map_join(thinking_deltas, "", & &1["delta"]["thinking"]) == "Let me think about this"
+
+      assert Enum.map_join(thinking_deltas, "", & &1["delta"]["thinking"]) ==
+               "Let me think about this"
     end
 
     test "tool-only response: correct indices, no phantom text block" do
@@ -409,15 +448,55 @@ defmodule Llmgateway.InboundAnthropicTest do
 
       chunks = [
         # 1. Role chunk
-        %{"id" => "c1", "model" => "m", "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
+        %{
+          "id" => "c1",
+          "model" => "m",
+          "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]
+        },
         # 2. Tool call start
-        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "id" => "call_1", "function" => %{"name" => "get_weather", "arguments" => ""}}]}, "finish_reason" => nil}]},
+        %{
+          "choices" => [
+            %{
+              "delta" => %{
+                "tool_calls" => [
+                  %{
+                    "index" => 0,
+                    "id" => "call_1",
+                    "function" => %{"name" => "get_weather", "arguments" => ""}
+                  }
+                ]
+              },
+              "finish_reason" => nil
+            }
+          ]
+        },
         # 3. Tool arg delta
-        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "function" => %{"arguments" => args1}}]}, "finish_reason" => nil}]},
+        %{
+          "choices" => [
+            %{
+              "delta" => %{
+                "tool_calls" => [%{"index" => 0, "function" => %{"arguments" => args1}}]
+              },
+              "finish_reason" => nil
+            }
+          ]
+        },
         # 4. Tool arg delta continued
-        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "function" => %{"arguments" => args2}}]}, "finish_reason" => nil}]},
+        %{
+          "choices" => [
+            %{
+              "delta" => %{
+                "tool_calls" => [%{"index" => 0, "function" => %{"arguments" => args2}}]
+              },
+              "finish_reason" => nil
+            }
+          ]
+        },
         # 5. Finish
-        %{"choices" => [%{"delta" => %{}, "finish_reason" => "tool_calls"}], "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}}
+        %{
+          "choices" => [%{"delta" => %{}, "finish_reason" => "tool_calls"}],
+          "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 20}
+        }
       ]
 
       {all_events, _final_state} =
@@ -432,11 +511,12 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert "message_start" in types
       # Text block should never appear
       refute Enum.any?(all_events, fn e ->
-        e["type"] == "content_block_start" && e["content_block"]["type"] == "text"
-      end)
+               e["type"] == "content_block_start" && e["content_block"]["type"] == "text"
+             end)
+
       refute Enum.any?(all_events, fn e ->
-        e["type"] == "content_block_delta" && e["delta"]["type"] == "text_delta"
-      end)
+               e["type"] == "content_block_delta" && e["delta"]["type"] == "text_delta"
+             end)
 
       # Tool block at index 0
       tool_starts = Enum.filter(all_events, &(&1["type"] == "content_block_start"))
@@ -447,9 +527,11 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert hd(tool_starts)["content_block"]["name"] == "get_weather"
 
       # Arg deltas at index 0
-      arg_deltas = Enum.filter(all_events, fn e ->
-        e["type"] == "content_block_delta" && e["delta"]["type"] == "input_json_delta"
-      end)
+      arg_deltas =
+        Enum.filter(all_events, fn e ->
+          e["type"] == "content_block_delta" && e["delta"]["type"] == "input_json_delta"
+        end)
+
       assert length(arg_deltas) == 2
       assert Enum.all?(arg_deltas, &(&1["index"] == 0))
       assert Enum.map_join(arg_deltas, "", & &1["delta"]["partial_json"]) == args3
@@ -468,15 +550,46 @@ defmodule Llmgateway.InboundAnthropicTest do
 
       chunks = [
         # 1. Role
-        %{"id" => "c1", "model" => "m", "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
+        %{
+          "id" => "c1",
+          "model" => "m",
+          "choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]
+        },
         # 2. Text
         %{"choices" => [%{"delta" => %{"content" => "Let me check"}, "finish_reason" => nil}]},
         # 3. Tool start
-        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "id" => "call_1", "function" => %{"name" => "f", "arguments" => ""}}]}, "finish_reason" => nil}]},
+        %{
+          "choices" => [
+            %{
+              "delta" => %{
+                "tool_calls" => [
+                  %{
+                    "index" => 0,
+                    "id" => "call_1",
+                    "function" => %{"name" => "f", "arguments" => ""}
+                  }
+                ]
+              },
+              "finish_reason" => nil
+            }
+          ]
+        },
         # 4. Tool arg
-        %{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "function" => %{"arguments" => tool_args}}]}, "finish_reason" => nil}]},
+        %{
+          "choices" => [
+            %{
+              "delta" => %{
+                "tool_calls" => [%{"index" => 0, "function" => %{"arguments" => tool_args}}]
+              },
+              "finish_reason" => nil
+            }
+          ]
+        },
         # 5. Finish
-        %{"choices" => [%{"delta" => %{}, "finish_reason" => "tool_calls"}], "usage" => %{"prompt_tokens" => 5, "completion_tokens" => 15}}
+        %{
+          "choices" => [%{"delta" => %{}, "finish_reason" => "tool_calls"}],
+          "usage" => %{"prompt_tokens" => 5, "completion_tokens" => 15}
+        }
       ]
 
       {all_events, _final_state} =
@@ -502,10 +615,14 @@ defmodule Llmgateway.InboundAnthropicTest do
         |> Enum.map(fn {e, i} -> {e["type"], e["content_block"], i} end)
 
       {_, _text_cb, text_start_pos} =
-        Enum.find(event_types_with_idx, fn {type, cb, _} -> type == "content_block_start" && cb && cb["type"] == "text" end)
+        Enum.find(event_types_with_idx, fn {type, cb, _} ->
+          type == "content_block_start" && cb && cb["type"] == "text"
+        end)
 
       {_, _tool_cb, tool_start_pos} =
-        Enum.find(event_types_with_idx, fn {type, cb, _} -> type == "content_block_start" && cb && cb["type"] == "tool_use" end)
+        Enum.find(event_types_with_idx, fn {type, cb, _} ->
+          type == "content_block_start" && cb && cb["type"] == "tool_use"
+        end)
 
       # First content_block_stop should be for text (at index 0) and come before tool start
       first_stop_pos = Enum.find_index(all_events, &(&1["type"] == "content_block_stop"))
@@ -513,12 +630,15 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert first_stop_pos < tool_start_pos
 
       # Arg deltas at Anthropic index 1 (not 0)
-      arg_deltas = Enum.filter(all_events, fn e ->
-        e["type"] == "content_block_delta" && e["delta"]["type"] == "input_json_delta"
-      end)
+      arg_deltas =
+        Enum.filter(all_events, fn e ->
+          e["type"] == "content_block_delta" && e["delta"]["type"] == "input_json_delta"
+        end)
+
       assert Enum.all?(arg_deltas, &(&1["index"] == 1))
     end
   end
+
   describe "sanitize_args/1" do
     test "strips trailing period after closing brace" do
       args = "{\"key\": \"val\"}\n."

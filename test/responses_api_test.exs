@@ -138,7 +138,10 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
              }
 
       # The tool result still pairs by call_id and the orphaned-output shape is gone.
-      assert Enum.any?(input, fn it -> it["type"] == "function_call_output" and it["call_id"] == "call_1" end)
+      assert Enum.any?(input, fn it ->
+               it["type"] == "function_call_output" and it["call_id"] == "call_1"
+             end)
+
       refute Enum.any?(input, &(&1["role"] == "assistant" and &1["content"] == ""))
     end
 
@@ -150,7 +153,11 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
             "role" => "assistant",
             "content" => "Using the tool now.",
             "tool_calls" => [
-              %{"id" => "c2", "type" => "function", "function" => %{"name" => "ping", "arguments" => "{}"}}
+              %{
+                "id" => "c2",
+                "type" => "function",
+                "function" => %{"name" => "ping", "arguments" => "{}"}
+              }
             ]
           }
         ]
@@ -186,10 +193,17 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
             "role" => "assistant",
             "content" => [
               %{"type" => "text", "text" => "Checking…"},
-              %{"type" => "image", "source" => %{"type" => "url", "url" => "https://example.com/x.png"}}
+              %{
+                "type" => "image",
+                "source" => %{"type" => "url", "url" => "https://example.com/x.png"}
+              }
             ],
             "tool_calls" => [
-              %{"id" => "c3", "type" => "function", "function" => %{"name" => "ping", "arguments" => "{}"}}
+              %{
+                "id" => "c3",
+                "type" => "function",
+                "function" => %{"name" => "ping", "arguments" => "{}"}
+              }
             ]
           }
         ]
@@ -202,7 +216,10 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
       # Text block is re-typed as output_text inside the assistant message item.
       assert Enum.any?(input, fn it ->
                it["type"] == "message" and it["role"] == "assistant" and
-                 Enum.any?(it["content"], &(&1["type"] == "output_text" and &1["text"] == "Checking…"))
+                 Enum.any?(
+                   it["content"],
+                   &(&1["type"] == "output_text" and &1["text"] == "Checking…")
+                 )
              end)
 
       # Non-text blocks are carried over unchanged.
@@ -393,7 +410,9 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
         "id" => "resp_1",
         "status" => "completed",
         "model" => "gpt-4",
-        "output" => [%{"type" => "message", "content" => [%{"type" => "output_text", "text" => "x"}]}],
+        "output" => [
+          %{"type" => "message", "content" => [%{"type" => "output_text", "text" => "x"}]}
+        ],
         "usage" => %{"input_tokens" => 1, "output_tokens" => 1}
       }
 
@@ -407,7 +426,9 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
         "id" => "resp_2",
         "status" => "incomplete",
         "model" => "gpt-4",
-        "output" => [%{"type" => "message", "content" => [%{"type" => "output_text", "text" => "..."}]}],
+        "output" => [
+          %{"type" => "message", "content" => [%{"type" => "output_text", "text" => "..."}]}
+        ],
         "usage" => %{"input_tokens" => 10, "output_tokens" => 100}
       }
 
@@ -712,7 +733,11 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
     end
 
     test "response.function_call_arguments.delta appends partial arguments" do
-      event = %{"type" => "response.function_call_arguments.delta", "output_index" => 1, "delta" => ~s({"city":"Pa)}
+      event = %{
+        "type" => "response.function_call_arguments.delta",
+        "output_index" => 1,
+        "delta" => ~s({"city":"Pa)
+      }
 
       assert {:ok, chunk} = ResponsesAPI.stream_event_to_chunk(event)
       [choice] = chunk["choices"]
@@ -724,7 +749,10 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
     end
 
     test "response.function_call_arguments.done is skipped" do
-      assert :skip = ResponsesAPI.stream_event_to_chunk(%{"type" => "response.function_call_arguments.done"})
+      assert :skip =
+               ResponsesAPI.stream_event_to_chunk(%{
+                 "type" => "response.function_call_arguments.done"
+               })
     end
 
     test "response.completed with function call output finishes tool_calls" do

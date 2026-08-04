@@ -98,7 +98,12 @@ defmodule Llmgateway do
 
       case Router.resolve_deployments(fb_name, key: opts[:key]) do
         {:ok, deployments, more_fallbacks} ->
-          Fallback.call_with_fallback(deployments, rest ++ more_fallbacks, body, opts)
+          Fallback.call_with_fallback(
+            deployments,
+            rest ++ more_fallbacks,
+            body,
+            Keyword.put(opts, :seen, seen)
+          )
 
         {:error, :forbidden, nested} ->
           try_fallback_only(rest ++ nested, body, opts, seen)

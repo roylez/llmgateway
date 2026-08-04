@@ -268,7 +268,9 @@ defmodule Llmgateway.StreamTest do
               "id" => "r",
               "model" => "gpt-5.6-terra",
               "status" => "completed",
-              "output" => [%{"type" => "function_call", "call_id" => "fc_1", "name" => "get_weather"}]
+              "output" => [
+                %{"type" => "function_call", "call_id" => "fc_1", "name" => "get_weather"}
+              ]
             }
           }
         ]
