@@ -12,11 +12,17 @@ defmodule Llmgateway.Server do
   - `GET /v1/models/:model` — get model metadata
   - `GET /v1/model/info` — LiteLLM model info
   - `GET /v1/model_group/info` — LiteLLM model group info
+  - `GET /version` — Hermes/vLLM discovery endpoint
   - `GET /health` — health check
 
   Stub endpoints (501 for POST, empty list for GET, 404 for GET by ID):
   - embeddings, audio, images, rerank, files, batches,
     fine_tuning/jobs, assistants, threads, responses
+
+  Unsupported native APIs return the standard 404 JSON error envelope:
+  - Ollama (`/api/tags`, `/api/show`)
+  - llama.cpp (`/props`)
+  - LM Studio (`/api/v1/models`)
   """
 
   use Plug.Router
@@ -40,6 +46,13 @@ defmodule Llmgateway.Server do
 
   head "/api/hello" do
     send_json(conn, 200, %{})
+  end
+
+  # ── Hermes/vLLM discovery ──────────────────────────────────
+
+  get "/version" do
+    gateway_version = Application.spec(:llmgateway, :vsn) |> to_string()
+    send_json(conn, 200, %{"version" => gateway_version})
   end
 
   # ── Models ─────────────────────────────────────────────────
@@ -375,6 +388,24 @@ defmodule Llmgateway.Server do
 
   get "/realtime/client_secrets" do
     empty_list(conn)
+  end
+
+  # ── Unsupported native probes ──────────────────────────────
+
+  get "/api/v1/models" do
+    unsupported_native_probe(conn, "/api/v1/models")
+  end
+
+  get "/api/tags" do
+    unsupported_native_probe(conn, "/api/tags")
+  end
+
+  get "/props" do
+    unsupported_native_probe(conn, "/props")
+  end
+
+  post "/api/show" do
+    unsupported_native_probe(conn, "/api/show")
   end
 
   # ── Catch-all ─────────────────────────────────────────────
@@ -736,6 +767,14 @@ defmodule Llmgateway.Server do
 
   defp not_implemented(conn),
     do: send_json(conn, 501, error_body("Not implemented", "not_implemented"))
+
+  defp unsupported_native_probe(conn, endpoint) do
+    send_json(
+      conn,
+      404,
+      error_body("Native endpoint '#{endpoint}' is not supported", "not_found")
+    )
+  end
 
   defp put_context_header(conn, model_name, key_name) do
     case Llmgateway.Router.resolve_model(model_name, key: key_name) do

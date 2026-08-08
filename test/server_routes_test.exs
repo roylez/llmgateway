@@ -287,6 +287,56 @@ defmodule Llmgateway.ServerRoutesTest do
       do: assert_empty_list(:get, "/v1/realtime/client_secrets")
   end
 
+  # ── Hermes native-probe compatibility ──────────────────────
+
+  describe "Hermes native-probe compatibility" do
+    test "GET /version returns a non-empty version string" do
+      conn = call(:get, "/version")
+
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+      assert is_binary(json(conn)["version"])
+      assert json(conn)["version"] != ""
+    end
+
+    test "unsupported native GET probes return the standard not-found envelope" do
+      for path <- ["/api/v1/models", "/api/tags", "/v1/props", "/props"] do
+        conn = call(:get, path)
+        assert conn.status == 404, "expected #{path} to return 404"
+        assert json(conn)["error"]["type"] == "not_found"
+      end
+    end
+
+    test "POST /api/show returns the standard not-found envelope" do
+      conn = call(:post, "/api/show", %{"name" => "gpt-4o-mini"})
+
+      assert conn.status == 404
+      assert json(conn)["error"]["type"] == "not_found"
+    end
+
+    test "native probes do not mask the OpenAI chat route" do
+      for path <- ["/api/v1/models", "/api/tags", "/v1/props", "/props"] do
+        conn = call(:get, path)
+        assert conn.status == 404, "expected #{path} to return 404"
+        assert json(conn)["error"]["type"] == "not_found"
+      end
+
+      version_conn = call(:get, "/version")
+      assert version_conn.status == 200
+      assert is_binary(json(version_conn)["version"])
+
+      chat_conn =
+        call(:post, "/v1/chat/completions", %{
+          "model" => "nonexistent",
+          "messages" => [%{"role" => "user", "content" => "hi"}]
+        })
+
+      assert chat_conn.status == 404
+      assert json(chat_conn)["error"]["type"] == "not_found"
+      assert json(chat_conn)["error"]["message"] == "Model 'nonexistent' not found"
+    end
+  end
+
   # ── Existing routes still work ─────────────────────────────
 
   describe "existing routes unchanged" do
