@@ -37,6 +37,8 @@ defmodule Llmgateway.FallbackStreamTest do
                executor: Llmgateway.FallbackStreamTest.Executor
              )
 
+    assert Cooldown.active?("openrouter-personal", "deepseek/deepseek-chat")
+
     assert {deployment.provider_name, deployment.upstream_model} ==
              {"openai-main", "gpt-4o-mini"}
 
@@ -49,6 +51,38 @@ defmodule Llmgateway.FallbackStreamTest do
     assert_receive {:stream_call, {"openai-main", "gpt-4o-mini"}, ^body, sibling_opts}
     assert sibling_opts[:rid] == "request-1"
     assert sibling_opts[:timeout] == 4_000
+  end
+
+  test "does not cool down a provider on client errors" do
+    Process.put(:stream_results, %{
+      {"openrouter-personal", "deepseek/deepseek-chat"} =>
+        {:error, %{type: :client_error, status: 404}},
+      {"openai-main", "gpt-4o-mini"} => {:ok, [:sibling_stream]}
+    })
+
+    assert {:ok, [:sibling_stream], %{provider_name: "openai-main"}} =
+             Fallback.stream("deepseek-v4-flash", %{},
+               key: "personal-key",
+               rid: "request-1",
+               executor: Llmgateway.FallbackStreamTest.Executor
+             )
+
+    refute Cooldown.active?("openrouter-personal", "deepseek/deepseek-chat")
+    drain_mailbox()
+
+    Process.put(:stream_results, %{
+      {"openrouter-personal", "deepseek/deepseek-chat"} => {:ok, [:primary_stream]}
+    })
+
+    assert {:ok, [:primary_stream], %{provider_name: "openrouter-personal"}} =
+             Fallback.stream("deepseek-v4-flash", %{},
+               key: "personal-key",
+               rid: "request-2",
+               executor: Llmgateway.FallbackStreamTest.Executor
+             )
+
+    assert_receive {:stream_call, {"openrouter-personal", "deepseek/deepseek-chat"}, %{}, _}
+    refute_received {:stream_call, {"openai-main", "gpt-4o-mini"}, _, _}
   end
 
   test "skips a cooling candidate and tries its sibling" do
@@ -128,6 +162,14 @@ defmodule Llmgateway.FallbackStreamTest do
     assert_receive {:stream_call, {"secondary-b", "secondary-b-model"}, %{}, _}
     assert_receive {:stream_call, {"tertiary-a", "tertiary-a-model"}, %{}, _}
     refute_received {:stream_call, _, _, _}
+  end
+
+  defp drain_mailbox do
+    receive do
+      _ -> drain_mailbox()
+    after
+      0 -> :ok
+    end
   end
 
   defp model(name, provider_name, upstream_model, priority) do

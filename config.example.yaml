@@ -11,8 +11,10 @@ server:
 
 # ── Settings ────────────────────────────────────────────────
 settings:
-  # After a retryable failure, skip the failed provider and upstream model for
-  # this many seconds. Set 0 to disable cooldowns.
+  # After a retryable upstream failure (5xx, 429, timeout, transport),
+  # skip the failed provider and upstream model for this many seconds.
+  # Client errors (4xx) advance the fallback chain but do not cool down.
+  # Set 0 to disable cooldowns.
   cooldown_seconds: 60
 
 # ── API Keys ────────────────────────────────────────────────

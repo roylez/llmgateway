@@ -107,7 +107,8 @@ defmodule Llmgateway.Fallback do
           if Provider.retryable?(reason) and
                (rest != [] or remaining != [] or match?({:stream, _}, mode)) do
             log_failure(candidate, reason, remaining, opts, mode)
-            Cooldown.record_failure(deployment.provider_name, deployment.upstream_model)
+            if Provider.cooling?(reason),
+              do: Cooldown.record_failure(deployment.provider_name, deployment.upstream_model)
 
             run_candidates(
               rest,

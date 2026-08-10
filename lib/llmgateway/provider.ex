@@ -63,6 +63,11 @@ defmodule Llmgateway.Provider do
 
   def retryable?(_), do: false
 
+  @cooling_types [:rate_limit, :server_error, :transport_error, :timeout]
+
+  def cooling?(%{type: type}), do: type in @cooling_types
+  def cooling?(_), do: false
+
   # ── Response handling (pattern match on status) ───────────
 
   defp handle_response({:ok, %{status: status, body: body}}, deployment, warnings, is_responses)
