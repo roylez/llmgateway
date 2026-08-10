@@ -389,14 +389,17 @@ defmodule Llmgateway.Convert.InboundAnthropic do
   end
 
   defp convert_message(%{"role" => "assistant", "content" => parts}) when is_list(parts) do
-    {texts, tool_uses} =
-      Enum.reduce(parts, {[], []}, fn
-        %{"type" => "text", "text" => t}, {ts, tus} -> {[t | ts], tus}
-        %{"type" => "tool_use"} = tu, {ts, tus} -> {ts, [tu | tus]}
+    {texts, thinking, tool_uses} =
+      Enum.reduce(parts, {[], [], []}, fn
+        %{"type" => "text", "text" => t}, {ts, th, tus} -> {[t | ts], th, tus}
+        %{"type" => "thinking", "thinking" => t}, {ts, th, tus} -> {ts, [t | th], tus}
+        %{"type" => "redacted_thinking", "data" => d}, {ts, th, tus} -> {ts, [d | th], tus}
+        %{"type" => "tool_use"} = tu, {ts, th, tus} -> {ts, th, [tu | tus]}
         _, acc -> acc
       end)
 
     text = texts |> Enum.reverse() |> Enum.join("")
+    reasoning = thinking |> Enum.reverse() |> Enum.join("")
 
     tool_calls =
       tool_uses
@@ -414,6 +417,7 @@ defmodule Llmgateway.Convert.InboundAnthropic do
 
     msg = %{"role" => "assistant"}
     msg = if text != "", do: Map.put(msg, "content", text), else: msg
+    msg = if reasoning != "", do: Map.put(msg, "reasoning_content", reasoning), else: msg
     msg = if tool_calls != [], do: Map.put(msg, "tool_calls", tool_calls), else: msg
     msg
   end
@@ -441,11 +445,14 @@ defmodule Llmgateway.Convert.InboundAnthropic do
     %{"type" => "image_url", "image_url" => %{"url" => url}}
   end
 
-  defp convert_content_part(part), do: part
-
-  # ── Content block building (response) ─────────────────────
-
   defp build_content_blocks(message) do
+    thinking_blocks =
+      case message["reasoning_content"] do
+        nil -> []
+        "" -> []
+        text when is_binary(text) -> [%{"type" => "thinking", "thinking" => text}]
+      end
+
     text_blocks =
       case message["content"] do
         nil -> []
@@ -475,7 +482,7 @@ defmodule Llmgateway.Convert.InboundAnthropic do
           end)
       end
 
-    text_blocks ++ tool_blocks
+    thinking_blocks ++ text_blocks ++ tool_blocks
   end
 
   # ── Tool conversion ───────────────────────────────────────

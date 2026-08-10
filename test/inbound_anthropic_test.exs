@@ -167,7 +167,83 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert image["type"] == "image_url"
       assert image["image_url"]["url"] == "data:image/png;base64,abc123"
     end
+    test "preserves assistant thinking blocks as reasoning_content" do
+      body = %{
+        "model" => "claude",
+        "messages" => [
+          %{"role" => "user", "content" => "Think"},
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "thinking", "thinking" => "Let me think about this"},
+              %{"type" => "text", "text" => "The answer is 42"}
+            ]
+          }
+        ],
+        "max_tokens" => 100
+      }
+
+      result = InboundAnthropic.to_canonical(body)
+
+      [_, assistant] = result["messages"]
+      assert assistant["role"] == "assistant"
+      assert assistant["content"] == "The answer is 42"
+      assert assistant["reasoning_content"] == "Let me think about this"
+    end
+
+    test "preserves thinking blocks with tool_use" do
+      body = %{
+        "model" => "claude",
+        "messages" => [
+          %{"role" => "user", "content" => "Weather?"},
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "thinking", "thinking" => "Need to look up weather"},
+              %{
+                "type" => "tool_use",
+                "id" => "tu_1",
+                "name" => "get_weather",
+                "input" => %{"city" => "Paris"}
+              }
+            ]
+          }
+        ],
+        "max_tokens" => 100
+      }
+
+      result = InboundAnthropic.to_canonical(body)
+
+      [_, assistant] = result["messages"]
+      assert assistant["reasoning_content"] == "Need to look up weather"
+      assert [tc] = assistant["tool_calls"]
+      assert tc["function"]["name"] == "get_weather"
+    end
+
+    test "preserves redacted_thinking blocks as reasoning_content" do
+      body = %{
+        "model" => "claude",
+        "messages" => [
+          %{"role" => "user", "content" => "Hi"},
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "redacted_thinking", "data" => "encrypted-data"},
+              %{"type" => "text", "text" => "Hello"}
+            ]
+          }
+        ],
+        "max_tokens" => 100
+      }
+
+      result = InboundAnthropic.to_canonical(body)
+
+      [_, assistant] = result["messages"]
+      assert assistant["reasoning_content"] == "encrypted-data"
+      assert assistant["content"] == "Hello"
+    end
   end
+
 
   describe "from_canonical/1 — OpenAI response → Anthropic" do
     test "basic text response" do
@@ -263,7 +339,33 @@ defmodule Llmgateway.InboundAnthropicTest do
         assert result["stop_reason"] == anthropic
       end
     end
+    test "reasoning_content becomes thinking block" do
+      openai_resp = %{
+        "id" => "chatcmpl-456",
+        "model" => "deepseek-v4-flash",
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "The answer is 42",
+              "reasoning_content" => "Let me think about this"
+            },
+            "finish_reason" => "stop"
+          }
+        ],
+        "usage" => %{"prompt_tokens" => 5, "completion_tokens" => 8}
+      }
+
+      result = InboundAnthropic.from_canonical(openai_resp)
+
+      [thinking, text] = result["content"]
+      assert thinking["type"] == "thinking"
+      assert thinking["thinking"] == "Let me think about this"
+      assert text["type"] == "text"
+      assert text["text"] == "The answer is 42"
+    end
   end
+
 
   describe "chunk_to_anthropic_events/2" do
     test "first chunk with role emits message_start (no eager text block)" do
