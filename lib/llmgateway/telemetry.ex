@@ -124,16 +124,16 @@ defmodule Llmgateway.Telemetry do
       end
 
     Logger.info(
-      "[llmgateway] model=#{meta.model} upstream=#{upstream} provider=#{meta.provider}#{usage_str} time=#{ms}ms"
+      "model=#{meta.model} upstream=#{upstream} provider=#{meta.provider}#{usage_str} time=#{ms}ms"
     )
   end
 
   def handle_event([:llmgateway, :request, :exception], measurements, meta, _config) do
     ms = System.convert_time_unit(measurements.duration, :native, :millisecond)
-    Logger.warning("[llmgateway] ✗ #{meta.model} #{meta.kind}: #{inspect(meta.reason)} (#{ms}ms)")
+    Logger.warning("✗ #{meta.model} #{meta.kind}: #{inspect(meta.reason)} (#{ms}ms)")
   end
 
   def handle_event([:llmgateway, :fallback, :triggered], _measurements, meta, _config) do
-    Logger.info("[llmgateway] ↪ fallback #{meta.from} → #{meta.to}")
+    Logger.info("↪ fallback #{meta.from} → #{meta.to}")
   end
 end
