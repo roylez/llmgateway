@@ -137,8 +137,45 @@ defmodule Llmgateway.StreamTest do
       assert stats.tool_deltas == 0
       assert stats.finish == "stop"
       assert stats.done == true
+      assert stats.synthetic == false
       assert stats.decode_failures == 0
       assert :done in items
+    end
+
+    test "synthesizes a stop when the upstream ends without a finish_reason" do
+      body = """
+      data: {"id":"router-x","choices":[{"index":0,"delta":{"reasoning_content":" returns it). Hmm"}}]}
+
+      data: {"choices":[],"cost":"0"}
+
+      """
+
+      items = LlmStream.build_stream(body, deployment(), false, "rid-synth") |> Enum.to_list()
+
+      # The empty-choices metadata event must not reach clients as a chunk.
+      refute Enum.any?(chunks(items), &(&1["choices"] == []))
+
+      [stop, {:stream_stats, stats}] = Enum.take(items, -2)
+
+      assert stop == %{
+               "choices" => [%{"index" => 0, "delta" => %{}, "finish_reason" => "stop"}]
+             }
+
+      assert stats.finish == nil
+      assert stats.synthetic == true
+      refute :done in items
+    end
+
+    test "upstream [DONE] without a finish_reason still yields a stop chunk" do
+      items =
+        LlmStream.build_stream("data: [DONE]\n\n", deployment(), false, "rid-done")
+        |> Enum.to_list()
+
+      [stop, {:stream_stats, stats}] = Enum.take(items, -2)
+
+      assert get_in(stop, ["choices", Access.at(0), "finish_reason"]) == "stop"
+      assert stats.done == true
+      assert stats.synthetic == true
     end
 
     test "text content is counted and forwarded in order" do
@@ -219,6 +256,7 @@ defmodule Llmgateway.StreamTest do
         skipped: %{},
         finish: "stop",
         done: true,
+        synthetic: false,
         decode_failures: 0,
         bytes: 74,
         tail: "{}"

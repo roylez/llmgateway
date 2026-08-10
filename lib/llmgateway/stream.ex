@@ -126,6 +126,7 @@ defmodule Llmgateway.Stream do
       skipped: %{},
       finish: nil,
       done: false,
+      synthetic: false,
       decode_failures: 0,
       bytes: 0,
       tail: ""
@@ -159,6 +160,25 @@ defmodule Llmgateway.Stream do
   end
 
   # Terminal element (`last_fun`) emitted once the upstream stream is exhausted.
+  # The upstream never emitted a terminal chunk carrying a finish_reason, so
+  # clients have no stop signal (Anthropic clients in particular never get a
+  # message_stop and wait for the turn to finish). Synthesize a well-formed
+  # terminal chunk with finish_reason "stop" — end_turn on the Anthropic
+  # side — before the diagnostics marker. If the upstream ends normally
+  # (chunk with finish_reason, or the responder already closed blocks), no
+  # synthesis happens.
+  defp finish_stats(%{finish: nil} = stats) do
+    stats = %{stats | synthetic: true}
+
+    {
+      [
+        %{"choices" => [%{"index" => 0, "delta" => %{}, "finish_reason" => "stop"}]},
+        {:stream_stats, stats}
+      ],
+      stats
+    }
+  end
+
   defp finish_stats(stats), do: {[{:stream_stats, stats}], stats}
 
   defp decode_and_convert("[DONE]", _deployment, _is_responses), do: {:ok, [:done]}
@@ -167,6 +187,12 @@ defmodule Llmgateway.Stream do
   # a raw SSE data line could not be decoded as JSON (i.e. it was dropped).
   defp decode_and_convert(data, deployment, is_responses) when is_binary(data) do
     case Jason.decode(data) do
+      # Some aggregator upstreams close the stream with a metadata event
+      # (e.g. {"choices":[],"cost":"0"}) instead of a terminal chunk or
+      # [DONE]. It carries no delta and no finish_reason — forward nothing.
+      {:ok, %{"choices" => []}} ->
+        {:ok, []}
+
       {:ok, event} ->
         result =
           if is_responses do
@@ -266,6 +292,7 @@ defmodule Llmgateway.Stream do
         "text=#{stats.text_deltas} thinking=#{stats.thinking_deltas} " <>
         "tools=#{stats.tool_deltas} skipped=#{inspect(stats.skipped)} " <>
         "finish=#{stats.finish || "none"} done=#{stats.done} " <>
+        "synthetic=#{stats.synthetic} " <>
         "failures=#{stats.decode_failures} bytes=#{stats.bytes} " <>
         "usage=#{inspect(usage || %{})}"
 
