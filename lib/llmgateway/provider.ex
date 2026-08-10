@@ -83,7 +83,7 @@ defmodule Llmgateway.Provider do
   end
 
   defp handle_response({:ok, %{status: 429, body: body}}, deployment, _warnings, _is_responses) do
-    Logger.warning("#{deployment.name}: rate limited")
+    warn(deployment, "rate limited")
 
     {:error,
      %{type: :rate_limit, status: 429, message: error_message(body), deployment: deployment.name}}
@@ -91,7 +91,7 @@ defmodule Llmgateway.Provider do
 
   defp handle_response({:ok, %{status: status, body: body}}, deployment, _warnings, _is_responses)
        when status >= 500 do
-    Logger.warning("#{deployment.name}: server error #{status}")
+    warn(deployment, "server error #{status}")
 
     {:error,
      %{
@@ -103,7 +103,7 @@ defmodule Llmgateway.Provider do
   end
 
   defp handle_response({:ok, %{status: status, body: body}}, deployment, _warnings, _is_responses) do
-    Logger.warning("#{deployment.name}: client error #{status}")
+    warn(deployment, "client error #{status}")
 
     {:error,
      %{
@@ -120,16 +120,22 @@ defmodule Llmgateway.Provider do
          _warnings,
          _is_responses
        ) do
-    Logger.warning("#{deployment.name}: transport error #{inspect(reason)}")
+    warn(deployment, "transport error #{inspect(reason)}")
     {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
   end
 
   defp handle_response({:error, reason}, deployment, _warnings, _is_responses) do
-    Logger.warning("#{deployment.name}: #{inspect(reason)}")
+    warn(deployment, inspect(reason))
     {:error, %{type: :unknown_error, reason: reason, deployment: deployment.name}}
   end
 
   # ── Helpers ───────────────────────────────────────────────
+
+  defp warn(deployment, msg) do
+    Logger.warning(
+      "#{deployment.name}: #{msg} (provider=#{deployment.provider_type}, upstream=#{deployment.upstream_model})"
+    )
+  end
 
   defp attach_metadata(body, deployment, warnings) do
     meta = %{

@@ -130,7 +130,11 @@ defmodule Llmgateway.Telemetry do
 
   def handle_event([:llmgateway, :request, :exception], measurements, meta, _config) do
     ms = System.convert_time_unit(measurements.duration, :native, :millisecond)
-    Logger.warning("✗ #{meta.model} #{meta.kind}: #{inspect(meta.reason)} (#{ms}ms)")
+    upstream = Map.get(meta, :upstream_model, meta.model)
+
+    Logger.warning(
+      "✗ #{meta.model}: #{meta.kind} provider=#{meta.provider} upstream=#{upstream} #{inspect(meta.reason)} (#{ms}ms)"
+    )
   end
 
   def handle_event([:llmgateway, :fallback, :triggered], _measurements, meta, _config) do
