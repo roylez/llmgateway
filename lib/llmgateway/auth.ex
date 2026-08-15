@@ -15,6 +15,12 @@ defmodule Llmgateway.Auth do
   # unknown client. GitHub Copilot overrides this below.
   @inference_user_agent "LiteLLM"
 
+  # OpenRouter's App attribution (the Activity "App" column) is driven by
+  # HTTP-Referer + X-OpenRouter-Title, not the User-Agent. Attribute OpenRouter
+  # inference as LiteLLM only; other providers get the common user-agent.
+  @openrouter_site_url "https://litellm.ai"
+  @openrouter_app_title "LiteLLM"
+
   alias Llmgateway.Convert.ResponsesAPI
 
   @doc """
@@ -95,6 +101,14 @@ defmodule Llmgateway.Auth do
             {:error, reason}
         end
     end
+  end
+
+  def add_headers(req, %Deployment{provider_type: :openrouter} = d) do
+    {:ok,
+     req
+     |> Req.Request.put_header("authorization", "Bearer #{d.api_key}")
+     |> Req.Request.put_header("http-referer", @openrouter_site_url)
+     |> Req.Request.put_header("x-openrouter-title", @openrouter_app_title)}
   end
 
   def add_headers(req, %Deployment{api_key: nil}), do: {:ok, req}

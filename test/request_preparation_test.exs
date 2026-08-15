@@ -95,6 +95,8 @@ defmodule Llmgateway.RequestPreparationTest do
 
     assert_receive {:captured_request, "/chat/completions", headers, chat_body}
     assert headers["user-agent"] == "LiteLLM"
+    assert headers["x-openrouter-title"] == "LiteLLM"
+    assert headers["http-referer"] == "https://litellm.ai"
     assert chat_body["messages"] == body["messages"]
     assert chat_body["model"] == "test-model"
     assert chat_body["provider"] == %{
@@ -112,6 +114,8 @@ defmodule Llmgateway.RequestPreparationTest do
 
     assert_receive {:captured_request, "/chat/completions", headers, chat_body}
     assert headers["user-agent"] == "LiteLLM"
+    refute Map.has_key?(headers, "x-openrouter-title")
+    refute Map.has_key?(headers, "http-referer")
     assert chat_body["messages"] == body["messages"]
     refute Map.has_key?(chat_body, "provider")
   end
@@ -142,6 +146,8 @@ defmodule Llmgateway.RequestPreparationTest do
 
     assert_receive {:captured_request, "/chat/completions", headers, chat_body}
     assert headers["user-agent"] == "LiteLLM"
+    assert headers["x-openrouter-title"] == "LiteLLM"
+    assert headers["http-referer"] == "https://litellm.ai"
     assert chat_body["messages"] == body["messages"]
     assert chat_body["model"] == "test-model"
     assert chat_body["stream"] == true
@@ -155,7 +161,7 @@ defmodule Llmgateway.RequestPreparationTest do
       provider_name: "test-provider",
       provider_type: provider_type,
       upstream_model: "test-model",
-      api_key: nil,
+      api_key: if(provider_type == :openrouter, do: "openrouter-key"),
       base_url: base_url,
       context: 1,
       output_limit: 1,
