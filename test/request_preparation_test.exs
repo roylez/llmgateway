@@ -5,7 +5,13 @@ defmodule Llmgateway.RequestPreparationTest.CapturePlug do
 
   def call(conn, opts) do
     {:ok, body, conn} = read_body(conn)
-    send(opts[:owner], {:captured_request, conn.request_path, Jason.decode!(body)})
+
+    headers =
+      for {name, value} <- conn.req_headers, into: %{} do
+        {name, value}
+      end
+
+    send(opts[:owner], {:captured_request, conn.request_path, headers, Jason.decode!(body)})
 
     response =
       if conn.request_path == "/responses" do
@@ -64,14 +70,14 @@ defmodule Llmgateway.RequestPreparationTest do
   test "Provider.call converts only responses request bodies", %{base_url: base_url, body: body} do
     assert {:ok, _response} = Provider.call(deployment(base_url, "/responses"), body)
 
-    assert_receive {:captured_request, "/responses", responses_body}
+    assert_receive {:captured_request, "/responses", _headers, responses_body}
     assert responses_body["input"] == [%{"role" => "user", "content" => "Hello"}]
     assert responses_body["instructions"] == "You are helpful."
     refute Map.has_key?(responses_body, "messages")
 
     assert {:ok, _response} = Provider.call(deployment(base_url, "/chat/completions"), body)
 
-    assert_receive {:captured_request, "/chat/completions", chat_body}
+    assert_receive {:captured_request, "/chat/completions", _headers, chat_body}
     assert chat_body["messages"] == body["messages"]
     refute Map.has_key?(chat_body, "input")
     refute Map.has_key?(chat_body, "provider")
@@ -87,7 +93,8 @@ defmodule Llmgateway.RequestPreparationTest do
     assert {:ok, _response} =
              Provider.call(deployment(base_url, "/chat/completions", :openrouter), body)
 
-    assert_receive {:captured_request, "/chat/completions", chat_body}
+    assert_receive {:captured_request, "/chat/completions", headers, chat_body}
+    assert headers["user-agent"] == "LiteLLM"
     assert chat_body["messages"] == body["messages"]
     assert chat_body["model"] == "test-model"
     assert chat_body["provider"] == %{
@@ -97,17 +104,29 @@ defmodule Llmgateway.RequestPreparationTest do
     refute Map.has_key?(chat_body, "input")
   end
 
+  test "Provider.call sends LiteLLM user-agent to generic providers", %{
+    base_url: base_url,
+    body: body
+  } do
+    assert {:ok, _response} = Provider.call(deployment(base_url, "/chat/completions"), body)
+
+    assert_receive {:captured_request, "/chat/completions", headers, chat_body}
+    assert headers["user-agent"] == "LiteLLM"
+    assert chat_body["messages"] == body["messages"]
+    refute Map.has_key?(chat_body, "provider")
+  end
+
   test "Stream.call converts only responses request bodies", %{base_url: base_url, body: body} do
     assert {:ok, _stream} = Stream.call(deployment(base_url, "/responses"), body)
 
-    assert_receive {:captured_request, "/responses", responses_body}
+    assert_receive {:captured_request, "/responses", _headers, responses_body}
     assert responses_body["input"] == [%{"role" => "user", "content" => "Hello"}]
     assert responses_body["stream"] == true
     refute Map.has_key?(responses_body, "messages")
 
     assert {:ok, _stream} = Stream.call(deployment(base_url, "/chat/completions"), body)
 
-    assert_receive {:captured_request, "/chat/completions", chat_body}
+    assert_receive {:captured_request, "/chat/completions", _headers, chat_body}
     assert chat_body["messages"] == body["messages"]
     assert chat_body["stream"] == true
     refute Map.has_key?(chat_body, "input")
@@ -121,7 +140,8 @@ defmodule Llmgateway.RequestPreparationTest do
     assert {:ok, _stream} =
              Stream.call(deployment(base_url, "/chat/completions", :openrouter), body)
 
-    assert_receive {:captured_request, "/chat/completions", chat_body}
+    assert_receive {:captured_request, "/chat/completions", headers, chat_body}
+    assert headers["user-agent"] == "LiteLLM"
     assert chat_body["messages"] == body["messages"]
     assert chat_body["model"] == "test-model"
     assert chat_body["stream"] == true

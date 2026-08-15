@@ -10,6 +10,11 @@ defmodule Llmgateway.Auth do
 
   alias Llmgateway.Deployment
 
+  # Outbound inference requests identify as LiteLLM so upstream providers
+  # (OpenRouter, Z.AI, OpenCode, ...) do not display this gateway as an
+  # unknown client. GitHub Copilot overrides this below.
+  @inference_user_agent "LiteLLM"
+
   alias Llmgateway.Convert.ResponsesAPI
 
   @doc """
@@ -20,7 +25,9 @@ defmodule Llmgateway.Auth do
   request bodies.
   """
   def prepare_request(%Deployment{} = deployment, provider_body, timeout) do
-    base_req = Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
+    base_req =
+      Req.new(base_url: deployment.base_url, receive_timeout: timeout, retry: false)
+      |> Req.Request.put_header("user-agent", @inference_user_agent)
 
     case add_headers(base_req, deployment) do
       {:ok, req} ->
