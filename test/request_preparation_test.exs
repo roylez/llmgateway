@@ -74,6 +74,27 @@ defmodule Llmgateway.RequestPreparationTest do
     assert_receive {:captured_request, "/chat/completions", chat_body}
     assert chat_body["messages"] == body["messages"]
     refute Map.has_key?(chat_body, "input")
+    refute Map.has_key?(chat_body, "provider")
+  end
+
+  test "Provider.call applies the OpenRouter latency policy", %{base_url: base_url, body: body} do
+    body =
+      Map.put(body, "provider", %{
+        "order" => ["test-provider"],
+        "preferred_max_latency" => %{"p50" => 10}
+      })
+
+    assert {:ok, _response} =
+             Provider.call(deployment(base_url, "/chat/completions", :openrouter), body)
+
+    assert_receive {:captured_request, "/chat/completions", chat_body}
+    assert chat_body["messages"] == body["messages"]
+    assert chat_body["model"] == "test-model"
+    assert chat_body["provider"] == %{
+             "order" => ["test-provider"],
+             "preferred_max_latency" => %{"p50" => 1}
+           }
+    refute Map.has_key?(chat_body, "input")
   end
 
   test "Stream.call converts only responses request bodies", %{base_url: base_url, body: body} do
@@ -90,13 +111,29 @@ defmodule Llmgateway.RequestPreparationTest do
     assert chat_body["messages"] == body["messages"]
     assert chat_body["stream"] == true
     refute Map.has_key?(chat_body, "input")
+    refute Map.has_key?(chat_body, "provider")
   end
 
-  defp deployment(base_url, path) do
+  test "Stream.call injects OpenRouter preferred_max_latency into chat completions", %{
+    base_url: base_url,
+    body: body
+  } do
+    assert {:ok, _stream} =
+             Stream.call(deployment(base_url, "/chat/completions", :openrouter), body)
+
+    assert_receive {:captured_request, "/chat/completions", chat_body}
+    assert chat_body["messages"] == body["messages"]
+    assert chat_body["model"] == "test-model"
+    assert chat_body["stream"] == true
+    assert chat_body["provider"] == %{"preferred_max_latency" => %{"p50" => 1}}
+    refute Map.has_key?(chat_body, "input")
+  end
+
+  defp deployment(base_url, path, provider_type \\ :openai) do
     %Deployment{
       name: "test",
       provider_name: "test-provider",
-      provider_type: :openai,
+      provider_type: provider_type,
       upstream_model: "test-model",
       api_key: nil,
       base_url: base_url,

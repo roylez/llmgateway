@@ -28,7 +28,11 @@ defmodule Llmgateway.Auth do
         is_responses = url == "/responses"
 
         request_body =
-          if is_responses, do: ResponsesAPI.to_responses(provider_body), else: provider_body
+          if is_responses do
+            ResponsesAPI.to_responses(provider_body)
+          else
+            apply_provider_tuning(provider_body, deployment, url)
+          end
 
         {:ok, req, url, request_body, is_responses}
 
@@ -36,6 +40,22 @@ defmodule Llmgateway.Auth do
         {:error, reason}
     end
   end
+
+  # Keep provider-specific request tuning at this shared outbound boundary.
+  defp apply_provider_tuning(
+         body,
+         %Deployment{provider_type: :openrouter},
+         "/chat/completions"
+       ) do
+    provider =
+      body
+      |> Map.get("provider", %{})
+      |> Map.put("preferred_max_latency", %{"p50" => 1})
+
+    Map.put(body, "provider", provider)
+  end
+
+  defp apply_provider_tuning(body, _deployment, _url), do: body
 
   @doc """
   Add auth headers to a Req request based on deployment provider type.
