@@ -213,6 +213,19 @@ defmodule Llmgateway.RouterTest do
       assert models["slow"].owned_by == "openai"
       assert models["slow"].limits == %{context: 128_000, output: 16_384}
     end
+    test "preserves Copilot backing metadata for aliases" do
+      assert {:ok, alias_deployment, _} = Router.resolve_model("copilot", key: "work-key")
+      assert {:ok, model_deployment, _} = Router.resolve_model("copilot-test", key: "work-key")
+
+      assert alias_deployment.provider_type == :github_copilot
+      assert alias_deployment.upstream_model == model_deployment.upstream_model
+      assert alias_deployment.context == model_deployment.context
+      assert alias_deployment.output_limit == model_deployment.output_limit
+
+      models = Map.new(Router.list_models(key: "work-key"), &{&1.id, &1})
+      assert models["copilot"].limits == models["copilot-test"].limits
+      assert models["copilot"].owned_by == models["copilot-test"].owned_by
+    end
   end
 
   describe "request_path/1" do

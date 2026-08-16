@@ -65,9 +65,9 @@ defmodule Llmgateway.ConfigTest do
       personal_key = Enum.find(config["keys"], &(&1["name"] == "personal-key"))
 
       assert personal_key["aliases"] == %{
-               "fast" => "gpt-4o-mini",
+               "fast" => "deepseek-v4-flash",
                "default" => "gpt-4o-mini",
-               "slow" => "gpt-4o-mini",
+               "slow" => "tied-model",
                "invalid" => "missing-model"
              }
     end

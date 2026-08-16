@@ -4,6 +4,8 @@ server:
 keys:
   - name: work-key
     value: test-work-key-value
+    aliases:
+      copilot: copilot-test
   - name: personal-key
     value: test-personal-key-value
     aliases:

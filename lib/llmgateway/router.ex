@@ -114,8 +114,7 @@ defmodule Llmgateway.Router do
           [] ->
             []
 
-          [m | _] ->
-            [model_metadata(name, m)]
+          [m | _] -> [model_metadata(name, live_metadata(m))]
         end
       end)
 
@@ -125,7 +124,7 @@ defmodule Llmgateway.Router do
              |> Map.fetch!(backing_name)
              |> find_accessible(key_name)
              |> order_by_priority() do
-          [model | _] -> [model_metadata(alias_name, model)]
+          [model | _] -> [model_metadata(alias_name, live_metadata(model))]
           [] -> []
         end
       end)
@@ -266,10 +265,21 @@ defmodule Llmgateway.Router do
   defp order_by_priority(configs) do
     Enum.sort_by(configs, & &1.priority, :desc)
   end
+  defp live_metadata(%{provider_type: :github_copilot, provider_name: provider_name, upstream_model: model} = config) do
+    server = String.to_atom("github_device_#{provider_name}")
+
+    case Process.whereis(server) && Llmgateway.Auth.GitHubDevice.get_model_metadata(server, model) do
+      %{context: context, output: output} -> %{config | context: context || config.context, output_limit: output || config.output_limit}
+      _ -> config
+    end
+  end
+
+  defp live_metadata(config), do: config
 
   # ── Deployment building ───────────────────────────────────
 
   defp build_deployment(model_config, state, public_name) do
+    model_config = live_metadata(model_config)
     provider = state.providers[model_config.provider_name]
 
     if is_nil(provider) do

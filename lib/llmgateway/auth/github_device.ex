@@ -47,6 +47,8 @@ defmodule Llmgateway.Auth.GitHubDevice do
     :api_base,
     # %{"gpt-5.5" => ["/responses"], ...}
     :model_endpoints,
+    # %{"gpt-5.5" => %{context: 400000, output: 128000}, ...}
+    :model_metadata,
     :token_dir,
     :status,
     # timer ref for proactive refresh
@@ -91,11 +93,15 @@ defmodule Llmgateway.Auth.GitHubDevice do
     end
   end
 
+  @doc "Get live metadata for a Copilot model, or nil when unavailable."
+  def get_model_metadata(server \\ __MODULE__, model_id) do
+    GenServer.call(server, {:get_model_metadata, model_id}, 5_000)
+  end
+
   @doc "List known model IDs from Copilot /models cache. Returns [] if not fetched yet."
   def list_known_models(server \\ __MODULE__) do
     GenServer.call(server, :list_known_models, 5_000)
   end
-
   # ── Server callbacks ──────────────────────────────────────
 
   @impl true
@@ -214,6 +220,11 @@ defmodule Llmgateway.Auth.GitHubDevice do
           {:reply, select_endpoint(endpoints), refetched}
       end
     end
+  end
+
+  @impl true
+  def handle_call({:get_model_metadata, model_id}, _from, state) do
+    {:reply, (state.model_metadata || %{})[model_id], state}
   end
 
   @impl true
@@ -451,9 +462,10 @@ defmodule Llmgateway.Auth.GitHubDevice do
             {m["id"], m["supported_endpoints"] || ["/chat/completions"]}
           end)
 
+        metadata = Map.new(models, &{&1["id"], model_metadata(&1)})
         save_model_endpoints(state, endpoints)
         Logger.debug("[#{state.provider_name}] Cached #{map_size(endpoints)} model endpoints")
-        %{state | model_endpoints: endpoints}
+        %{state | model_endpoints: endpoints, model_metadata: metadata}
 
       {:ok, %{status: status}} ->
         Logger.warning("[#{state.provider_name}] Failed to fetch models (#{status})")
@@ -463,6 +475,22 @@ defmodule Llmgateway.Auth.GitHubDevice do
         Logger.warning("[#{state.provider_name}] Failed to fetch models: #{inspect(reason)}")
         load_model_endpoints(state)
     end
+  end
+
+  defp model_metadata(model) do
+    context = first_integer(model, ["max_context_window_tokens", "context_window", "context_length"])
+    output = first_integer(model, ["max_output_tokens", "max_tokens", "output_limit"])
+
+    if context || output, do: %{context: context, output: output}, else: nil
+  end
+
+  defp first_integer(model, keys) do
+    Enum.find_value(keys, fn key ->
+      case model[key] do
+        value when is_integer(value) and value > 0 -> value
+        _ -> nil
+      end
+    end)
   end
 
   # ── Disk caching ──────────────────────────────────────────
