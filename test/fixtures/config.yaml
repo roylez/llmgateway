@@ -6,6 +6,11 @@ keys:
     value: test-work-key-value
   - name: personal-key
     value: test-personal-key-value
+    aliases:
+      fast: gpt-4o-mini
+      default: gpt-4o-mini
+      slow: gpt-4o-mini
+      invalid: missing-model
 
 providers:
   - name: openrouter

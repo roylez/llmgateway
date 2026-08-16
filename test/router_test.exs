@@ -169,6 +169,42 @@ defmodule Llmgateway.RouterTest do
     end
   end
 
+  describe "key-scoped model aliases" do
+    test "logs and ignores an unavailable alias" do
+      assert {:error, :not_found} = Router.resolve_model("invalid", key: "personal-key")
+      refute Enum.any?(Router.list_models(key: "personal-key"), &(&1.id == "invalid"))
+    end
+
+    test "resolves aliases only for their configured key" do
+      for alias_name <- ["fast", "default", "slow"] do
+        assert {:ok, deployment, _fallbacks} = Router.resolve_model(alias_name, key: "personal-key")
+        assert deployment.name == alias_name
+        assert is_binary(deployment.upstream_model)
+        assert is_atom(deployment.provider_type)
+        assert is_integer(deployment.context)
+        assert is_integer(deployment.output_limit)
+
+        assert {:error, :not_found} = Router.resolve_model(alias_name, key: "work-key")
+        assert {:error, :not_found} = Router.resolve_model(alias_name)
+      end
+    end
+
+    test "lists aliases with backing metadata" do
+      models = Router.list_models(key: "personal-key")
+      aliases = Map.new(models, &{&1.id, &1})
+
+      for alias_name <- ["fast", "default", "slow"] do
+        assert %{owned_by: _, limits: %{context: context, output: output}} = aliases[alias_name]
+        assert is_integer(context)
+        assert is_integer(output)
+      end
+
+      refute Map.has_key?(aliases, "invalid")
+      refute Enum.any?(Router.list_models(key: "work-key"), &(&1.id in ["fast", "default", "slow"]))
+      refute Enum.any?(Router.list_models(), &(&1.id in ["fast", "default", "slow"]))
+    end
+  end
+
   describe "request_path/1" do
     test "uses llmdb execution path when present" do
       assert Auth.request_path(deployment(%{path: "/responses"})) == "/responses"

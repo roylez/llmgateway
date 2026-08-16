@@ -1,4 +1,6 @@
 defmodule Llmgateway.Router do
+  require Logger
+
   @moduledoc """
   GenServer that resolves model names to deployments, validates key access,
   and provides fallback chains.
@@ -102,33 +104,42 @@ defmodule Llmgateway.Router do
   @impl true
   def handle_call({:list_models, opts}, _from, state) do
     key_name = opts[:key]
+    aliases = Map.get(state.aliases, key_name, %{})
 
     models =
       state.models
+      |> Enum.reject(fn {name, _configs} -> Map.has_key?(aliases, name) end)
       |> Enum.flat_map(fn {name, configs} ->
         case configs |> find_accessible(key_name) |> order_by_priority() do
           [] ->
             []
 
           [m | _] ->
-            [
-              %{
-                id: name,
-                object: "model",
-                owned_by: Atom.to_string(m.provider_type),
-                limits: %{context: m.context, output: m.output_limit}
-              }
-            ]
+            [model_metadata(name, m)]
         end
       end)
 
-    {:reply, models, state}
+    aliases =
+      Enum.flat_map(aliases, fn {alias_name, backing_name} ->
+        case state.models
+             |> Map.fetch!(backing_name)
+             |> find_accessible(key_name)
+             |> order_by_priority() do
+          [model | _] -> [model_metadata(alias_name, model)]
+          [] -> []
+        end
+      end)
+
+    {:reply, models ++ aliases, state}
   end
 
-  @impl true
-  def handle_call({:reload, config}, _from, _state) do
-    new_state = build_state(config)
-    {:reply, :ok, new_state}
+  defp model_metadata(name, model) do
+    %{
+      id: name,
+      object: "model",
+      owned_by: Atom.to_string(model.provider_type),
+      limits: %{context: model.context, output: model.output_limit}
+    }
   end
 
   # ── State construction ────────────────────────────────────
@@ -136,18 +147,20 @@ defmodule Llmgateway.Router do
   defp build_state(config) do
     providers = Map.new(config["providers"], &{&1.name, &1})
 
-    # Group models by name — same name can have multiple deployments
     models =
       config["models"]
       |> Enum.group_by(& &1.name)
 
     keys = build_key_map(config["keys"])
+    {aliases, invalid_aliases} = build_alias_state(config["keys"], models)
     fallbacks = config["fallbacks"] || []
 
     %{
       providers: providers,
       models: models,
       keys: keys,
+      aliases: aliases,
+      invalid_aliases: invalid_aliases,
       fallbacks: fallbacks
     }
   end
@@ -158,21 +171,76 @@ defmodule Llmgateway.Router do
 
   defp build_key_map(nil), do: %{}
 
+  defp build_alias_state(keys, models) when is_list(keys) do
+    Enum.reduce(keys, {%{}, %{}}, fn key, {valid, invalid} ->
+      key_name = key["name"]
+      aliases = Map.get(key, "aliases", %{})
+
+      Enum.reduce(aliases, {valid, invalid}, fn {alias_name, backing_name},
+                                                {valid, invalid} ->
+        accessible =
+          case Map.get(models, backing_name) do
+            nil -> false
+            configs -> find_accessible(configs, key_name) != []
+          end
+
+        if Map.has_key?(aliases, backing_name) or not accessible do
+          Logger.warning(
+            "[config] Alias '#{alias_name}' for key '#{key_name}' targets unavailable model '#{backing_name}'; alias ignored"
+          )
+
+          {valid,
+           Map.update(invalid, key_name, MapSet.new([alias_name]), &MapSet.put(&1, alias_name))}
+        else
+          {Map.update(valid, key_name, %{alias_name => backing_name},
+             &Map.put(&1, alias_name, backing_name)), invalid}
+        end
+      end)
+    end)
+  end
+
+  defp build_alias_state(_, _), do: {%{}, %{}}
+
   # ── Model resolution (pattern matching on key access) ────
 
-  defp resolve_deployments(name, _key_name, %{models: models}) when not is_map_key(models, name),
-    do: {:error, :not_found}
-
   defp resolve_deployments(name, key_name, state) do
-    fallbacks = find_fallbacks(name, state)
+    case alias_target(name, key_name, state) do
+      {:ok, backing_name} -> resolve_deployments_for(name, backing_name, key_name, state)
+      :invalid -> {:error, :not_found}
+      :ordinary ->
+        if is_map_key(state.models, name) do
+          resolve_deployments_for(name, name, key_name, state)
+        else
+          {:error, :not_found}
+        end
+    end
+  end
+
+  defp alias_target(name, key_name, state) do
+    aliases = Map.get(state.aliases, key_name, %{})
+
+    cond do
+      Map.has_key?(aliases, name) ->
+        {:ok, aliases[name]}
+
+      MapSet.member?(Map.get(state.invalid_aliases, key_name, MapSet.new()), name) ->
+        :invalid
+
+      true ->
+        :ordinary
+    end
+  end
+
+  defp resolve_deployments_for(public_name, backing_name, key_name, state) do
+    fallbacks = find_fallbacks(backing_name, state)
 
     deployments =
       state.models
-      |> Map.fetch!(name)
+      |> Map.fetch!(backing_name)
       |> find_accessible(key_name)
       |> order_by_priority()
       |> Enum.reduce_while({:ok, []}, fn config, {:ok, acc} ->
-        case build_deployment(config, state) do
+        case build_deployment(config, state, public_name) do
           {:ok, deployment} -> {:cont, {:ok, [deployment | acc]}}
           {:error, _} -> {:halt, :forbidden}
         end
@@ -201,14 +269,14 @@ defmodule Llmgateway.Router do
 
   # ── Deployment building ───────────────────────────────────
 
-  defp build_deployment(model_config, state) do
+  defp build_deployment(model_config, state, public_name) do
     provider = state.providers[model_config.provider_name]
 
     if is_nil(provider) do
       {:error, "provider '#{model_config.provider_name}' not found"}
     else
       deployment = %Deployment{
-        name: model_config.name,
+        name: public_name,
         provider_name: model_config.provider_name,
         provider_type: model_config.provider_type,
         upstream_model: model_config.upstream_model,
@@ -228,4 +296,5 @@ defmodule Llmgateway.Router do
   defp find_fallbacks(model_name, %{fallbacks: fallbacks}) do
     Map.get(fallbacks, model_name) || Map.get(fallbacks, "*") || []
   end
+
 end

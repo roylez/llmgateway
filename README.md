@@ -101,15 +101,21 @@ Model metadata (context length, output limits) is sourced from llmdb — no manu
 
 ### Keys
 
-Virtual API keys for authenticating clients. Models without a `keys` field are accessible to all keys.
+Virtual API keys authenticate clients. Models without a `keys` field are accessible to all keys.
 
 ```yaml
 keys:
-  - name: dev
-    value: $LLMGATEWAY_DEV_KEY
+  - name: personal-key
+    value: $PERSONAL_KEY
+    aliases:
+      fast: deepseek-v4-flash
+      default: gpt-4o-mini
+      slow: glm-5-turbo
   - name: prod
     value: $LLMGATEWAY_PROD_KEY
 ```
+
+Each alias maps a public alias ID to a public model ID declared in `models`. The alias is available only to its configured key. Aliases do not chain through other aliases. An alias shadows an ordinary model with the same name for that key. Keys without `aliases` keep their current behavior. The `name:model` model shorthand is a separate group-level alias feature.
 
 Omit the `keys` section entirely to allow unauthenticated access.
 

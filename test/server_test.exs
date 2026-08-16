@@ -91,6 +91,34 @@ defmodule Llmgateway.ServerTest do
     end
   end
 
+  describe "key-scoped aliases" do
+    test "lists aliases only for the configured key" do
+      conn = call(:get, "/v1/models", nil, [{"authorization", "Bearer test-personal-key-value"}])
+      names = json_response(conn)["data"] |> Enum.map(& &1["id"])
+
+      assert Enum.all?(["fast", "default", "slow"], &(&1 in names))
+      refute "invalid" in names
+
+      work_conn = call(:get, "/v1/models", nil, [{"authorization", "Bearer test-work-key-value"}])
+      work_names = json_response(work_conn)["data"] |> Enum.map(& &1["id"])
+      refute Enum.any?(["fast", "default", "slow"], &(&1 in work_names))
+    end
+
+    test "returns alias metadata and model info limits" do
+      conn = call(:get, "/v1/models/fast", nil, [{"authorization", "Bearer test-personal-key-value"}])
+      body = json_response(conn)
+
+      assert body["id"] == "fast"
+      assert is_integer(body["limits"]["context"])
+      assert is_integer(body["limits"]["output"])
+
+      info = call(:get, "/v1/model/info", nil, [{"authorization", "Bearer test-personal-key-value"}])
+      fast = Enum.find(json_response(info)["data"], &(&1["id"] == "fast"))
+      assert is_integer(fast["context_window"])
+      assert is_integer(fast["max_tokens"])
+    end
+  end
+
   describe "authentication" do
     test "rejects invalid key" do
       conn = call(:get, "/v1/models", nil, [{"authorization", "Bearer bad-key"}])

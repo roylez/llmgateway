@@ -20,6 +20,10 @@ settings:
 # ── API Keys ────────────────────────────────────────────────
 # Virtual keys for authenticating clients to the proxy.
 # Models can be restricted to specific keys.
+# An alias is available only when its configured key is authenticated.
+# Alias values refer to public model names declared in `models`.
+# Aliases do not chain through other aliases.
+# An alias shadows an ordinary model with the same name for its key.
 # Omit this section entirely to allow unauthenticated access.
 
 keys:
@@ -27,6 +31,32 @@ keys:
     value: $LLMGATEWAY_DEV_KEY
   - name: prod
     value: $LLMGATEWAY_PROD_KEY
+    aliases:
+      fast: gpt-4o-mini
+      default: gpt-4o
+      slow: claude-sonnet
+
+[README.md#B920]
+PUT 102.=114:
+### Keys
+
+Virtual API keys authenticate clients. Models without a `keys` field are accessible to all keys.
+
+```yaml
+keys:
+  - name: personal-key
+    value: $PERSONAL_KEY
+    aliases:
+      fast: deepseek-v4-flash
+      default: gpt-4o-mini
+      slow: glm-5-turbo
+  - name: prod
+    value: $LLMGATEWAY_PROD_KEY
+```
+
+Each alias maps a public alias ID to a public model ID declared in `models`. The alias is available only to its configured key. Aliases do not chain through other aliases. An alias shadows an ordinary model with the same name for that key. Keys without `aliases` keep their current behavior. The `name:model` model shorthand is a separate group-level alias feature.
+
+Omit the `keys` section entirely to allow unauthenticated access.
 
 # ── Providers ───────────────────────────────────────────────
 # Each provider defines a connection to an upstream LLM service.

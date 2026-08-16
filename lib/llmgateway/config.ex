@@ -94,12 +94,51 @@ defmodule Llmgateway.Config do
         {:error, error} -> [error | errors]
       end
 
+    errors =
+      case validate_keys(config["keys"]) do
+        :ok -> errors
+        {:error, error} -> [error | errors]
+      end
+
     if errors == [] do
       {:ok, config}
     else
       {:error, Enum.join(errors, "; ")}
     end
   end
+
+  defp validate_keys(nil), do: :ok
+  defp validate_keys(keys) when not is_list(keys), do: :ok
+
+  defp validate_keys(keys) do
+    Enum.reduce_while(keys, :ok, fn
+      entry, :ok when is_map(entry) ->
+        case Map.fetch(entry, "aliases") do
+          :error -> {:cont, :ok}
+          {:ok, aliases} ->
+            case validate_aliases(aliases) do
+              :ok -> {:cont, :ok}
+              {:error, _} = error -> {:halt, error}
+            end
+        end
+
+      _, :ok -> {:cont, :ok}
+    end)
+  end
+
+  defp validate_aliases(aliases) when is_map(aliases) do
+    if Enum.all?(aliases, fn {alias_name, model_name} ->
+         is_binary(alias_name) and byte_size(alias_name) > 0 and
+           is_binary(model_name) and byte_size(model_name) > 0
+       end) do
+      :ok
+    else
+      {:error, "key aliases must be a map of non-empty alias names to non-empty model names"}
+    end
+  end
+
+  defp validate_aliases(_),
+    do: {:error, "key aliases must be a map of non-empty alias names to non-empty model names"}
 
   defp validate_models(nil), do: {:error, "missing 'models' section"}
   defp validate_models(models) when not is_list(models), do: {:error, "models must be a list"}

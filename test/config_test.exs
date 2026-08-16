@@ -60,6 +60,42 @@ defmodule Llmgateway.ConfigTest do
       assert copilot.path == nil
     end
 
+    test "preserves key aliases" do
+      {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
+      personal_key = Enum.find(config["keys"], &(&1["name"] == "personal-key"))
+
+      assert personal_key["aliases"] == %{
+               "fast" => "gpt-4o-mini",
+               "default" => "gpt-4o-mini",
+               "slow" => "gpt-4o-mini",
+               "invalid" => "missing-model"
+             }
+    end
+
+    test "rejects malformed key aliases" do
+      yaml_path = Path.join(@fixtures_path, "invalid_key_aliases.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+      keys:
+        - name: test
+          value: test-value
+          aliases: [fast]
+      models:
+        - provider: openai
+          models:
+            - gpt-4o-mini
+      """)
+
+      assert {:error, "key aliases must be a map of non-empty alias names to non-empty model names"} =
+               Config.load(yaml_path)
+    after
+      File.rm("test/fixtures/invalid_key_aliases.yaml")
+    end
+
     test "uses a bare group child as its public name" do
       yaml_path = Path.join(@fixtures_path, "config_no_name.yaml")
 

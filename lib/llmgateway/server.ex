@@ -109,8 +109,8 @@ defmodule Llmgateway.Server do
           "created" => 0,
           "owned_by" => m.owned_by,
           "mode" => "chat",
-          "max_tokens" => Map.get(m.limits, "output", 4096),
-          "context_window" => Map.get(m.limits, "context", 4096)
+          "max_tokens" => Map.get(m.limits, :output, 4096),
+          "context_window" => Map.get(m.limits, :context, 4096)
         }
       end)
 
