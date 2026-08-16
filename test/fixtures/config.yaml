@@ -7,9 +7,9 @@ keys:
   - name: personal-key
     value: test-personal-key-value
     aliases:
-      fast: gpt-4o-mini
+      fast: deepseek-v4-flash
       default: gpt-4o-mini
-      slow: gpt-4o-mini
+      slow: tied-model
       invalid: missing-model
 
 providers:

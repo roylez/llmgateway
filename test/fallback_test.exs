@@ -62,7 +62,7 @@ defmodule Llmgateway.FallbackTest do
 
   test "executes an alias through its backing deployment" do
     body = %{"messages" => [%{"role" => "user", "content" => "hi"}]}
-    Process.put(:call_results, %{{"openai-main", "gpt-4o-mini"} => {:ok, %{"id" => "response"}}})
+    Process.put(:call_results, %{{"openrouter-personal", "deepseek/deepseek-chat"} => {:ok, %{"id" => "response"}}})
 
     assert {:ok, deployments, fallbacks} =
              Router.resolve_deployments("fast", key: "personal-key")
@@ -74,6 +74,6 @@ defmodule Llmgateway.FallbackTest do
                executor: Llmgateway.FallbackTest.Executor
              )
 
-    assert_receive {:call, {"openai-main", "gpt-4o-mini"}, ^body, _}
+    assert_receive {:call, {"openrouter-personal", "deepseek/deepseek-chat"}, ^body, _}
   end
 end

@@ -203,6 +203,16 @@ defmodule Llmgateway.RouterTest do
       refute Enum.any?(Router.list_models(key: "work-key"), &(&1.id in ["fast", "default", "slow"]))
       refute Enum.any?(Router.list_models(), &(&1.id in ["fast", "default", "slow"]))
     end
+    test "exposes each backing model's metadata" do
+      models = Map.new(Router.list_models(key: "personal-key"), &{&1.id, &1})
+
+      assert models["fast"].owned_by == "openrouter"
+      assert models["fast"].limits == %{context: 131_072, output: 16_000}
+      assert models["default"].owned_by == "openai"
+      assert models["default"].limits == %{context: 128_000, output: 16_384}
+      assert models["slow"].owned_by == "openai"
+      assert models["slow"].limits == %{context: 128_000, output: 16_384}
+    end
   end
 
   describe "request_path/1" do
