@@ -72,6 +72,8 @@ defmodule Llmgateway.ServerTest do
       model = Enum.find(body["data"], &(&1["id"] == "gpt-4o-mini"))
       assert is_map(model["limits"])
       assert is_integer(model["limits"]["context"])
+      assert model["context_window"] == model["limits"]["context"]
+      assert model["max_tokens"] == model["limits"]["output"]
     end
   end
 
@@ -83,6 +85,8 @@ defmodule Llmgateway.ServerTest do
       assert body["id"] == "gpt-4o-mini"
       assert body["object"] == "model"
       assert is_integer(body["limits"]["context"])
+      assert body["context_window"] == body["limits"]["context"]
+      assert body["max_tokens"] == body["limits"]["output"]
     end
 
     test "returns 404 for unknown model" do
@@ -116,6 +120,11 @@ defmodule Llmgateway.ServerTest do
       fast = Enum.find(json_response(info)["data"], &(&1["id"] == "fast"))
       assert is_integer(fast["context_window"])
       assert is_integer(fast["max_tokens"])
+      assert fast["model_name"] == "fast"
+      assert fast["model_info"]["max_input_tokens"] == fast["context_window"]
+      assert fast["model_info"]["max_tokens"] == fast["max_tokens"]
+      assert fast["model_info"]["max_completion_tokens"] == fast["max_tokens"]
+      assert fast["model_info"]["recommended_max_tokens"] == fast["max_tokens"]
     end
   end
 

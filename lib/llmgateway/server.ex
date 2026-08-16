@@ -62,12 +62,17 @@ defmodule Llmgateway.Server do
 
     data =
       Enum.map(models, fn m ->
+        context = Map.get(m.limits, :context)
+        output = Map.get(m.limits, :output)
+
         %{
           "id" => m.id,
           "object" => "model",
           "created" => 0,
           "owned_by" => m.owned_by,
-          "limits" => m.limits
+          "limits" => m.limits,
+          "context_window" => context,
+          "max_tokens" => output
         }
       end)
 
@@ -82,7 +87,9 @@ defmodule Llmgateway.Server do
           "object" => "model",
           "created" => 0,
           "owned_by" => Atom.to_string(deployment.provider_type),
-          "limits" => %{"context" => deployment.context, "output" => deployment.output_limit}
+          "limits" => %{"context" => deployment.context, "output" => deployment.output_limit},
+          "context_window" => deployment.context,
+          "max_tokens" => deployment.output_limit
         })
 
       {:error, :not_found} ->
@@ -103,14 +110,25 @@ defmodule Llmgateway.Server do
 
     data =
       Enum.map(models, fn m ->
+        context = Map.get(m.limits, :context)
+        output = Map.get(m.limits, :output)
+
         %{
           "id" => m.id,
+          "model_name" => m.id,
           "object" => "model",
           "created" => 0,
           "owned_by" => m.owned_by,
           "mode" => "chat",
-          "max_tokens" => Map.get(m.limits, :output, 4096),
-          "context_window" => Map.get(m.limits, :context, 4096)
+          "max_tokens" => output,
+          "context_window" => context,
+          "model_info" => %{
+            "id" => m.id,
+            "max_input_tokens" => context,
+            "max_tokens" => output,
+            "max_completion_tokens" => output,
+            "recommended_max_tokens" => output
+          }
         }
       end)
 
