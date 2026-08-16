@@ -58,6 +58,7 @@ defmodule Llmgateway.ConfigTest do
       copilot = Enum.find(config["models"], &(&1.name == "copilot-test"))
       assert copilot.provider_type == :github_copilot
       assert copilot.path == nil
+
     end
 
     test "preserves key aliases" do

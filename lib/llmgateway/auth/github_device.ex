@@ -142,7 +142,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
         Logger.info("[#{state.provider_name}] Using cached Copilot token")
 
         state =
-          if state.model_endpoints,
+          if state.model_endpoints && state.model_metadata,
             do: schedule_refresh(state),
             else: fetch_model_endpoints(state) |> schedule_refresh()
 
@@ -462,7 +462,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
             {m["id"], m["supported_endpoints"] || ["/chat/completions"]}
           end)
 
-        metadata = Map.new(models, &{&1["id"], model_metadata(&1)})
+        metadata = Map.new(models, &{&1["id"], parse_model_metadata(&1)})
         save_model_endpoints(state, endpoints)
         Logger.debug("[#{state.provider_name}] Cached #{map_size(endpoints)} model endpoints")
         %{state | model_endpoints: endpoints, model_metadata: metadata}
@@ -477,9 +477,11 @@ defmodule Llmgateway.Auth.GitHubDevice do
     end
   end
 
-  defp model_metadata(model) do
-    context = first_integer(model, ["max_context_window_tokens", "context_window", "context_length"])
-    output = first_integer(model, ["max_output_tokens", "max_tokens", "output_limit"])
+  @doc false
+  def parse_model_metadata(model) do
+    limits = get_in(model, ["capabilities", "limits"]) || %{}
+    context = first_integer(limits, ["max_context_window_tokens", "context_window", "context_length"])
+    output = first_integer(limits, ["max_output_tokens", "max_tokens", "output_limit"])
 
     if context || output, do: %{context: context, output: output}, else: nil
   end

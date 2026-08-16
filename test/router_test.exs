@@ -183,7 +183,9 @@ defmodule Llmgateway.RouterTest do
         assert is_atom(deployment.provider_type)
         assert is_integer(deployment.context)
         assert is_integer(deployment.output_limit)
+      end
 
+      for alias_name <- ["fast", "default", "slow"] do
         assert {:error, :not_found} = Router.resolve_model(alias_name, key: "work-key")
         assert {:error, :not_found} = Router.resolve_model(alias_name)
       end

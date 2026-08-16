@@ -374,9 +374,8 @@ defmodule Llmgateway.Config do
 
         {context, output_limit, path} =
           case LLMDB.model({provider.type, upstream_model}) do
-            {:ok, md} ->
-              path = get_in(md.execution, [:text, :path])
-              {md.limits.context, md.limits.output, path}
+            {:ok, metadata} ->
+              {metadata.limits.context, metadata.limits.output, get_in(metadata.execution, [:text, :path])}
 
             _ ->
               {nil, nil, nil}
