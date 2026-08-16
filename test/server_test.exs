@@ -119,6 +119,20 @@ defmodule Llmgateway.ServerTest do
     end
   end
 
+    test "matches each alias metadata to its backing model" do
+      headers = [{"authorization", "Bearer test-personal-key-value"}]
+
+      alias_ids = %{"fast" => "deepseek-v4-flash", "default" => "gpt-4o-mini", "slow" => "tied-model"}
+
+      for {alias_id, model_id} <- alias_ids do
+        alias_body = json_response(call(:get, "/v1/models/#{alias_id}", nil, headers))
+        model_body = json_response(call(:get, "/v1/models/#{model_id}", nil, headers))
+
+        assert alias_body["limits"] == model_body["limits"]
+        assert alias_body["owned_by"] == model_body["owned_by"]
+      end
+    end
+
   describe "authentication" do
     test "rejects invalid key" do
       conn = call(:get, "/v1/models", nil, [{"authorization", "Bearer bad-key"}])
