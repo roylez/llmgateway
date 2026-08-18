@@ -7,6 +7,7 @@ defmodule Llmgateway.Telemetry do
   - `[:llmgateway, :request, :start]` — fired before calling a provider
     - Measurements: `%{system_time: integer}`
     - Metadata: `%{app: string, model: string, upstream_model: string, deployment: string, provider: atom}`
+      - `app` is the request's `X-LiteLLM-Agent-Id` value, or `unknown` when absent.
 
   - `[:llmgateway, :request, :stop]` — fired after a successful response
     - Measurements: `%{duration: integer}` (native time units)

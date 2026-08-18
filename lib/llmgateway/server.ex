@@ -155,11 +155,11 @@ defmodule Llmgateway.Server do
   # ── Chat / Completions ────────────────────────────────────
 
   post "/chat/completions" do
-    route_completion(conn, conn.body_params, conn.assigns[:key_name], client_app(conn))
+    route_completion(conn, conn.body_params, conn.assigns[:key_name], agent_id(conn))
   end
 
   post "/completions" do
-    route_completion(conn, conn.body_params, conn.assigns[:key_name], client_app(conn))
+    route_completion(conn, conn.body_params, conn.assigns[:key_name], agent_id(conn))
   end
 
   post "/messages" do
@@ -552,7 +552,7 @@ defmodule Llmgateway.Server do
   # ── Anthropic-format handlers ─────────────────────────────
 
   defp handle_anthropic_completion(conn, model_name, canonical_body, key_name) do
-    case generate_text(model_name, canonical_body, key_name, client_app(conn)) do
+    case generate_text(model_name, canonical_body, key_name, agent_id(conn)) do
       {:ok, response} ->
         anthropic_response = Llmgateway.Convert.InboundAnthropic.from_canonical(response)
 
@@ -580,7 +580,7 @@ defmodule Llmgateway.Server do
   defp handle_anthropic_stream(conn, model_name, canonical_body, key_name, rid) do
     started_at = System.monotonic_time(:millisecond)
 
-    case stream_text(model_name, canonical_body, key_name, client_app(conn), rid) do
+    case stream_text(model_name, canonical_body, key_name, agent_id(conn), rid) do
       {:ok, stream, deployment} ->
         conn =
           conn
@@ -704,9 +704,10 @@ defmodule Llmgateway.Server do
     Fallback.stream(model, body, key: key_name, app: app, rid: rid)
   end
 
-  defp client_app(conn) do
-    case Plug.Conn.get_req_header(conn, "user-agent") do
-      [user_agent | _] -> user_agent
+  # LiteLLM records the calling agent from this request header.
+  defp agent_id(conn) do
+    case Plug.Conn.get_req_header(conn, "x-litellm-agent-id") do
+      [agent_id | _] -> agent_id
       _ -> "unknown"
     end
   end
