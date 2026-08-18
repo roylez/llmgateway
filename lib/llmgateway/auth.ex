@@ -63,7 +63,7 @@ defmodule Llmgateway.Auth do
     provider =
       body
       |> Map.get("provider", %{})
-      |> Map.put("preferred_max_latency", %{"p50" => 1})
+      |> Map.put("preferred_max_latency", %{"p50" => 2})
 
     Map.put(body, "provider", provider)
   end

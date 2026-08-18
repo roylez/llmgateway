@@ -101,7 +101,7 @@ defmodule Llmgateway.RequestPreparationTest do
     assert chat_body["model"] == "test-model"
     assert chat_body["provider"] == %{
              "order" => ["test-provider"],
-             "preferred_max_latency" => %{"p50" => 1}
+             "preferred_max_latency" => %{"p50" => 2}
            }
     refute Map.has_key?(chat_body, "input")
   end
@@ -151,7 +151,7 @@ defmodule Llmgateway.RequestPreparationTest do
     assert chat_body["messages"] == body["messages"]
     assert chat_body["model"] == "test-model"
     assert chat_body["stream"] == true
-    assert chat_body["provider"] == %{"preferred_max_latency" => %{"p50" => 1}}
+    assert chat_body["provider"] == %{"preferred_max_latency" => %{"p50" => 2}}
     refute Map.has_key?(chat_body, "input")
   end
 
