@@ -16,7 +16,7 @@ defmodule Llmgateway.Provider do
   """
   def call(%Deployment{} = deployment, body, opts \\ []) do
     timeout = opts[:timeout] || 120_000
-    tel = Telemetry.request_start(deployment)
+    tel = Telemetry.request_start(deployment, opts)
 
     # Convert OpenAI body → provider native format
     {provider_body, warnings} = Convert.to_provider(deployment, body)

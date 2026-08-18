@@ -28,7 +28,7 @@ defmodule Llmgateway do
 
   `model` is the local model alias (as defined in config.yaml).
   `body` is the request body in OpenAI chat/completions format.
-  `opts` may include `:key` for key-based access control.
+  `opts` may include `:key` for key-based access control and `:app` for request-log attribution.
 
   Returns `{:ok, response_body}` or `{:error, reason}`.
   """

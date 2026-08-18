@@ -155,16 +155,17 @@ defmodule Llmgateway.Server do
   # ── Chat / Completions ────────────────────────────────────
 
   post "/chat/completions" do
-    route_completion(conn, conn.body_params, conn.assigns[:key_name])
+    route_completion(conn, conn.body_params, conn.assigns[:key_name], client_app(conn))
   end
 
   post "/completions" do
-    route_completion(conn, conn.body_params, conn.assigns[:key_name])
+    route_completion(conn, conn.body_params, conn.assigns[:key_name], client_app(conn))
   end
 
   post "/messages" do
     body = conn.body_params
     key_name = conn.assigns[:key_name]
+
     rid = new_rid()
 
     Logger.info(
@@ -435,18 +436,18 @@ defmodule Llmgateway.Server do
 
   # ── Private: completion routing ────────────────────────────
 
-  defp route_completion(conn, body, key_name) do
+  defp route_completion(conn, body, key_name, app) do
     model_name = body["model"]
 
     if body["stream"] do
-      handle_stream(conn, model_name, body, key_name)
+      handle_stream(conn, model_name, body, key_name, app)
     else
-      handle_completion(conn, model_name, body, key_name)
+      handle_completion(conn, model_name, body, key_name, app)
     end
   end
 
-  defp handle_completion(conn, model_name, body, key_name) do
-    case Llmgateway.generate_text(model_name, body, key: key_name) do
+  defp handle_completion(conn, model_name, body, key_name, app) do
+    case generate_text(model_name, body, key_name, app) do
       {:ok, response} ->
         conn
         |> put_context_header(model_name, key_name)
@@ -485,12 +486,12 @@ defmodule Llmgateway.Server do
 
   # ── Streaming ─────────────────────────────────────────────
 
-  defp handle_stream(conn, model_name, body, key_name) do
+  defp handle_stream(conn, model_name, body, key_name, app) do
     rid = new_rid()
 
-    case Fallback.stream(model_name, body, key: key_name, rid: rid) do
+    case Fallback.stream(model_name, body, key: key_name, app: app, rid: rid) do
       {:ok, stream, deployment} ->
-        tel = Telemetry.request_start(deployment)
+        tel = Telemetry.request_start(deployment, app: app)
 
         conn =
           conn
@@ -551,7 +552,7 @@ defmodule Llmgateway.Server do
   # ── Anthropic-format handlers ─────────────────────────────
 
   defp handle_anthropic_completion(conn, model_name, canonical_body, key_name) do
-    case Llmgateway.generate_text(model_name, canonical_body, key: key_name) do
+    case generate_text(model_name, canonical_body, key_name, client_app(conn)) do
       {:ok, response} ->
         anthropic_response = Llmgateway.Convert.InboundAnthropic.from_canonical(response)
 
@@ -579,7 +580,7 @@ defmodule Llmgateway.Server do
   defp handle_anthropic_stream(conn, model_name, canonical_body, key_name, rid) do
     started_at = System.monotonic_time(:millisecond)
 
-    case Fallback.stream(model_name, canonical_body, key: key_name, rid: rid) do
+    case stream_text(model_name, canonical_body, key_name, client_app(conn), rid) do
       {:ok, stream, deployment} ->
         conn =
           conn
@@ -694,6 +695,21 @@ defmodule Llmgateway.Server do
   end
 
   defp format_stream_event(ev), do: "event=#{ev["type"]}"
+
+  defp generate_text(model, body, key_name, app) do
+    Llmgateway.generate_text(model, body, key: key_name, app: app)
+  end
+
+  defp stream_text(model, body, key_name, app, rid) do
+    Fallback.stream(model, body, key: key_name, app: app, rid: rid)
+  end
+
+  defp client_app(conn) do
+    case Plug.Conn.get_req_header(conn, "user-agent") do
+      [user_agent | _] -> user_agent
+      _ -> "unknown"
+    end
+  end
 
   # ── Plugs ─────────────────────────────────────────────────
 

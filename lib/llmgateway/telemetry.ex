@@ -6,11 +6,11 @@ defmodule Llmgateway.Telemetry do
 
   - `[:llmgateway, :request, :start]` — fired before calling a provider
     - Measurements: `%{system_time: integer}`
-    - Metadata: `%{model: string, deployment: string, provider: atom}`
+    - Metadata: `%{app: string, model: string, upstream_model: string, deployment: string, provider: atom}`
 
   - `[:llmgateway, :request, :stop]` — fired after a successful response
     - Measurements: `%{duration: integer}` (native time units)
-    - Metadata: `%{model: string, deployment: string, provider: atom, status: integer}`
+    - Metadata: `%{app: string, model: string, upstream_model: string, deployment: string, provider: atom, status: integer}`
 
   - `[:llmgateway, :request, :exception]` — fired on error
     - Measurements: `%{duration: integer}`
@@ -38,8 +38,9 @@ defmodule Llmgateway.Telemetry do
   require Logger
 
   @doc false
-  def request_start(deployment) do
+  def request_start(deployment, opts \\ []) do
     meta = %{
+      app: opts[:app],
       model: deployment.name,
       upstream_model: deployment.upstream_model,
       deployment: deployment.name,
@@ -124,7 +125,7 @@ defmodule Llmgateway.Telemetry do
       end
 
     Logger.info(
-      "model=#{meta.model} upstream=#{upstream} provider=#{meta.provider}#{usage_str} time=#{ms}ms"
+      "app=#{meta.app} model=#{meta.model} upstream=#{meta.provider}:#{upstream}#{usage_str} time=#{ms}ms"
     )
   end
 
