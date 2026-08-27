@@ -297,7 +297,13 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     %{"type" => "message", "role" => "assistant", "content" => content}
   end
 
-  # Responses API uses "input_text"/"output_text" instead of "text"
+  # Responses API requires `input_image`, with `image_url` as a direct URL string.
+  # Chat Completions uses `image_url` with an object value instead.
+  defp convert_content_block(_role, %{"type" => "image_url", "image_url" => %{"url" => url}}) do
+    %{"type" => "input_image", "image_url" => url}
+  end
+
+  # Responses API uses "input_text"/"output_text" instead of "text".
   defp convert_content_block("assistant", %{"type" => "text"} = block) do
     Map.put(block, "type", "output_text")
   end

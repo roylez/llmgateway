@@ -99,10 +99,12 @@ defmodule Llmgateway.RequestPreparationTest do
     assert headers["http-referer"] == "https://litellm.ai"
     assert chat_body["messages"] == body["messages"]
     assert chat_body["model"] == "test-model"
+
     assert chat_body["provider"] == %{
              "order" => ["test-provider"],
              "preferred_max_latency" => %{"p50" => 2}
            }
+
     refute Map.has_key?(chat_body, "input")
   end
 
@@ -135,6 +137,34 @@ defmodule Llmgateway.RequestPreparationTest do
     assert chat_body["stream"] == true
     refute Map.has_key?(chat_body, "input")
     refute Map.has_key?(chat_body, "provider")
+  end
+
+  test "Stream.call converts image content for Responses API", %{base_url: base_url} do
+    body = %{
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => [
+            %{"type" => "text", "text" => "Describe the image."},
+            %{"type" => "image_url", "image_url" => %{"url" => "https://example.test/image.png"}}
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, _stream} = Stream.call(deployment(base_url, "/responses"), body)
+
+    assert_receive {:captured_request, "/responses", _headers, responses_body}
+
+    assert responses_body["input"] == [
+             %{
+               "role" => "user",
+               "content" => [
+                 %{"type" => "input_text", "text" => "Describe the image."},
+                 %{"type" => "input_image", "image_url" => "https://example.test/image.png"}
+               ]
+             }
+           ]
   end
 
   test "Stream.call injects OpenRouter preferred_max_latency into chat completions", %{

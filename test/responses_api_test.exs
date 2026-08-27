@@ -185,6 +185,31 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
       refute Enum.any?(input, &Map.has_key?(&1, "tool_calls"))
     end
 
+    test "user image_url becomes a Responses input_image block" do
+      body = %{
+        "model" => "gpt-4",
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "text", "text" => "Describe this image."},
+              %{
+                "type" => "image_url",
+                "image_url" => %{"url" => "data:image/png;base64,iVBORw0KGgo="}
+              }
+            ]
+          }
+        ]
+      }
+
+      [message] = ResponsesAPI.to_responses(body)["input"]
+
+      assert message["content"] == [
+               %{"type" => "input_text", "text" => "Describe this image."},
+               %{"type" => "input_image", "image_url" => "data:image/png;base64,iVBORw0KGgo="}
+             ]
+    end
+
     test "assistant list content is preserved alongside tool calls" do
       body = %{
         "model" => "gpt-4",
