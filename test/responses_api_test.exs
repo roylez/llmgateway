@@ -91,6 +91,35 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
       assert result["reasoning"] == %{"effort" => "high"}
     end
 
+    test "clamps reasoning_effort to the model's supported ladder" do
+      body = %{
+        "model" => "gpt-5.6-luna",
+        "messages" => [%{"role" => "user", "content" => "Think"}],
+        "reasoning_effort" => "minimal"
+      }
+
+      allowed = ["none", "low", "medium", "high", "xhigh", "max"]
+
+      # OMP's lowest client level has no provider equivalent; it must map to
+      # the model's lightest *reasoning* effort, never disable it.
+      assert ResponsesAPI.to_responses(body, allowed_efforts: allowed)["reasoning"] == %{
+               "effort" => "low"
+             }
+
+      # Supported values pass through unchanged.
+      for effort <- allowed do
+        result =
+          ResponsesAPI.to_responses(%{body | "reasoning_effort" => effort},
+            allowed_efforts: allowed
+          )
+
+        assert result["reasoning"] == %{"effort" => effort}
+      end
+
+      # Without a known ladder, the client's effort is passed through.
+      assert ResponsesAPI.to_responses(body)["reasoning"] == %{"effort" => "minimal"}
+    end
+
     test "temperature is dropped (Copilot /responses rejects it for reasoning models)" do
       body = %{
         "model" => "gpt-4",

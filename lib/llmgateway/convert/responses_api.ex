@@ -15,9 +15,23 @@ defmodule Llmgateway.Convert.ResponsesAPI do
   Convert a Chat Completions request body to Responses API format.
   """
   def to_responses(body) when is_map(body) do
+    to_responses(body, [])
+  end
+
+  @doc """
+  Convert a Chat Completions request body to Responses API format,
+  clamping `reasoning_effort` to the model's allowed ladder when provided.
+
+  `opts[:allowed_efforts]` is the ordered list of supported effort values
+  (e.g. from LLMDB `extra.reasoning_options`). Unknown or unsupported
+  efforts are clamped to the nearest supported level.
+  """
+  def to_responses(body, opts) when is_map(body) do
     {system, messages} = extract_system(body["messages"] || [])
 
     input = Enum.flat_map(messages, &convert_input_messages/1)
+
+    allowed = Keyword.get(opts, :allowed_efforts)
 
     result =
       %{"model" => body["model"], "input" => input}
@@ -29,7 +43,7 @@ defmodule Llmgateway.Convert.ResponsesAPI do
       |> maybe_put("stream", body["stream"])
       |> convert_tools(body["tools"])
       |> convert_tool_choice(body["tool_choice"])
-      |> convert_reasoning(body["reasoning_effort"])
+      |> convert_reasoning(body["reasoning_effort"], allowed)
 
     result
   end
@@ -341,13 +355,48 @@ defmodule Llmgateway.Convert.ResponsesAPI do
   defp convert_tool_choice(result, "required"), do: Map.put(result, "tool_choice", "required")
   defp convert_tool_choice(result, choice), do: Map.put(result, "tool_choice", choice)
 
-  defp convert_reasoning(result, nil), do: result
+  defp convert_reasoning(result, nil, _allowed), do: result
 
-  defp convert_reasoning(result, effort) when is_binary(effort) do
-    Map.put(result, "reasoning", %{"effort" => effort})
+  defp convert_reasoning(result, effort, allowed) when is_binary(effort) do
+    Map.put(result, "reasoning", %{"effort" => clamp_effort(effort, allowed)})
   end
 
-  defp convert_reasoning(result, _), do: result
+  defp convert_reasoning(result, _, _allowed), do: result
+
+  # Clamp a requested effort to the model's supported ladder.
+  #
+  # Rank orders intent from "reasoning off" upward. "none" and "minimal" are
+  # distinct: "none" disables reasoning, "minimal" is the lightest reasoning.
+  # OMP's lowest client level is "minimal", which has no provider equivalent;
+  # it maps to the model's lowest *supported reasoning* effort (e.g. "low"),
+  # never to "none", so a request for some reasoning is never turned off.
+  @effort_rank %{
+    "none" => 0,
+    "minimal" => 1,
+    "low" => 2,
+    "medium" => 3,
+    "high" => 4,
+    "xhigh" => 5,
+    "max" => 6
+  }
+
+  defp clamp_effort(effort, allowed) when is_list(allowed) and allowed != [] do
+    if effort in allowed do
+      effort
+    else
+      rank = Map.get(@effort_rank, effort, 1)
+
+      # Closest supported rank wins; ties prefer the higher effort so a
+      # reasoning request is never silently downgraded below intent.
+      allowed
+      |> Enum.min_by(fn a ->
+        a_rank = Map.get(@effort_rank, a, 1)
+        {abs(a_rank - rank), if(a_rank >= rank, do: 0, else: 1)}
+      end)
+    end
+  end
+
+  defp clamp_effort(effort, _), do: effort
 
   # ── Response helpers ──────────────────────────────────────
 

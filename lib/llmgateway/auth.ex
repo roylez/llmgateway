@@ -42,7 +42,7 @@ defmodule Llmgateway.Auth do
 
         request_body =
           if is_responses do
-            ResponsesAPI.to_responses(provider_body)
+            ResponsesAPI.to_responses(provider_body, allowed_efforts: allowed_efforts(deployment))
           else
             apply_provider_tuning(provider_body, deployment, url)
           end
@@ -69,6 +69,20 @@ defmodule Llmgateway.Auth do
   end
 
   defp apply_provider_tuning(body, _deployment, _url), do: body
+
+  # Extract the model's supported reasoning-effort ladder from canonical
+  # LLMDB metadata (extra.reasoning_options). Returns nil when unknown so the
+  # converter leaves the client's effort untouched.
+  defp allowed_efforts(%Deployment{metadata: %{extra: extra}}) when is_map(extra) do
+    extra
+    |> Map.get("reasoning_options", [])
+    |> Enum.find_value(fn
+      %{"type" => "effort", "values" => values} when is_list(values) -> values
+      _ -> nil
+    end)
+  end
+
+  defp allowed_efforts(_), do: nil
 
   @doc """
   Add auth headers to a Req request based on deployment provider type.
