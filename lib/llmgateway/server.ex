@@ -80,38 +80,7 @@ defmodule Llmgateway.Server do
 
   get "/model/info" do
     models = Llmgateway.list_models(key: conn.assigns[:key_name])
-
-    data =
-      Enum.map(models, fn m ->
-        discovery = serialize_model(m)
-        limits = discovery["limits"]
-        context = limits[:context]
-        output = limits[:output]
-
-        %{
-          "id" => discovery["id"],
-          "model_name" => discovery["id"],
-          "object" => "model",
-          "created" => 0,
-          "owned_by" => discovery["owned_by"],
-          "mode" => "chat",
-          "max_tokens" => output,
-          "context_window" => context,
-          "reasoning" => discovery["reasoning"],
-          "model_info" =>
-            %{
-              "id" => discovery["id"],
-              "max_input_tokens" => context,
-              "max_tokens" => output,
-              "max_completion_tokens" => output,
-              "recommended_max_tokens" => output,
-              "reasoning" => discovery["reasoning"]
-            }
-            |> maybe_put("thinking", discovery["thinking"])
-        }
-        |> maybe_put("thinking", discovery["thinking"])
-      end)
-
+    data = Enum.map(models, &serialize_litellm_model_info/1)
     send_json(conn, 200, %{"data" => data})
   end
 
@@ -796,6 +765,65 @@ defmodule Llmgateway.Server do
     end
   end
 
+  # ── LiteLLM discovery serialization ─────────────────────
+  #
+  # OMP's LiteLLM provider reads the standard LiteLLM schema from
+  # /model/info: supports_reasoning, supports_vision,
+  # supports_function_calling, supported_openai_params, and
+  # max_input_tokens / max_output_tokens. Derive those from the
+  # canonical LLMDB capabilities so aliases present identically to
+  # their backing models.
+
+  defp serialize_litellm_model_info(m) do
+    limits = m.limits || %{}
+    context = limits[:context]
+    output = limits[:output]
+    reasoning = reasoning_enabled?(m.capabilities)
+    supported_params = supported_openai_params(m)
+
+    model_info =
+      %{
+        "id" => m.id,
+        "max_input_tokens" => context,
+        "max_output_tokens" => output,
+        "max_tokens" => output,
+        "supports_reasoning" => reasoning,
+        "supports_vision" => vision_supported?(m.modalities),
+        "supports_function_calling" => function_calling_supported?(m.capabilities)
+      }
+      |> maybe_put("supported_openai_params", supported_params)
+
+    %{
+      "model_name" => m.id,
+      "model_info" => model_info
+    }
+  end
+
+  defp reasoning_enabled?(%{reasoning: %{enabled: true}}), do: true
+  defp reasoning_enabled?(_), do: false
+
+  defp vision_supported?(%{input: input}) when is_list(input), do: :image in input
+  defp vision_supported?(_), do: false
+
+  defp function_calling_supported?(%{tools: %{enabled: true}}), do: true
+  defp function_calling_supported?(_), do: false
+
+  defp supported_openai_params(m) do
+    params =
+      []
+      |> then(
+        &if function_calling_supported?(m.capabilities),
+          do: ["tools", "tool_choice" | &1],
+          else: &1
+      )
+      |> then(&if reasoning_enabled?(m.capabilities), do: ["reasoning_effort" | &1], else: &1)
+
+    case params do
+      [] -> nil
+      _ -> Enum.reverse(params)
+    end
+  end
+
   defp serialize_model(m) do
     limits = m.limits || %{}
 
@@ -815,9 +843,6 @@ defmodule Llmgateway.Server do
     }
     |> maybe_put("thinking", thinking_projection(m.extra))
   end
-
-  defp reasoning_enabled?(%{reasoning: %{enabled: enabled}}), do: enabled == true
-  defp reasoning_enabled?(_), do: false
 
   defp thinking_projection(extra) when is_map(extra) do
     extra

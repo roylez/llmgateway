@@ -69,10 +69,11 @@ defmodule Llmgateway.ServerRoutesTest do
       body = json(conn)
       assert is_list(body["data"])
       [model | _] = body["data"]
-      assert Map.has_key?(model, "id")
-      assert model["mode"] == "chat"
-      assert Map.has_key?(model, "max_tokens")
-      assert Map.has_key?(model, "context_window")
+      assert Map.has_key?(model, "model_name")
+      assert Map.has_key?(model, "model_info")
+      assert Map.has_key?(model["model_info"], "max_input_tokens")
+      assert Map.has_key?(model["model_info"], "max_output_tokens")
+      assert Map.has_key?(model["model_info"], "supports_reasoning")
     end
 
     test "works without /v1 prefix" do

@@ -121,14 +121,12 @@ defmodule Llmgateway.ServerTest do
       info =
         call(:get, "/v1/model/info", nil, [{"authorization", "Bearer test-personal-key-value"}])
 
-      fast = Enum.find(json_response(info)["data"], &(&1["id"] == "fast"))
-      assert is_integer(fast["context_window"])
-      assert is_integer(fast["max_tokens"])
+      fast = Enum.find(json_response(info)["data"], &(&1["model_name"] == "fast"))
       assert fast["model_name"] == "fast"
-      assert fast["model_info"]["max_input_tokens"] == fast["context_window"]
-      assert fast["model_info"]["max_tokens"] == fast["max_tokens"]
-      assert fast["model_info"]["max_completion_tokens"] == fast["max_tokens"]
-      assert fast["model_info"]["recommended_max_tokens"] == fast["max_tokens"]
+      assert is_integer(fast["model_info"]["max_input_tokens"])
+      assert is_integer(fast["model_info"]["max_output_tokens"])
+      assert fast["model_info"]["max_input_tokens"] == body["limits"]["context"]
+      assert fast["model_info"]["max_output_tokens"] == body["limits"]["output"]
     end
 
     test "exposes Luna metadata through its Copilot alias" do
@@ -153,13 +151,13 @@ defmodule Llmgateway.ServerTest do
       assert Enum.find(models, &(&1["id"] == "luna")) == alias_body
 
       info = json_response(call(:get, "/v1/model/info", nil, headers))["data"]
-      luna = Enum.find(info, &(&1["id"] == "luna"))
+      luna = Enum.find(info, &(&1["model_name"] == "luna"))
       assert luna["model_name"] == "luna"
       assert luna["model_info"]["id"] == "luna"
-      assert luna["reasoning"] == true
-      assert luna["thinking"] == alias_body["thinking"]
-      assert luna["model_info"]["reasoning"] == true
-      assert luna["model_info"]["thinking"] == alias_body["thinking"]
+      assert luna["model_info"]["supports_reasoning"] == true
+      assert luna["model_info"]["supports_vision"] == true
+      assert luna["model_info"]["supports_function_calling"] == true
+      assert "reasoning_effort" in luna["model_info"]["supported_openai_params"]
     end
 
     test "matches each alias metadata to its backing model" do
