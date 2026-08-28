@@ -177,7 +177,9 @@ defmodule Llmgateway.RouterTest do
 
     test "resolves aliases only for their configured key" do
       for alias_name <- ["fast", "default", "slow"] do
-        assert {:ok, deployment, _fallbacks} = Router.resolve_model(alias_name, key: "personal-key")
+        assert {:ok, deployment, _fallbacks} =
+                 Router.resolve_model(alias_name, key: "personal-key")
+
         assert deployment.name == alias_name
         assert is_binary(deployment.upstream_model)
         assert is_atom(deployment.provider_type)
@@ -202,31 +204,44 @@ defmodule Llmgateway.RouterTest do
       end
 
       refute Map.has_key?(aliases, "invalid")
-      refute Enum.any?(Router.list_models(key: "work-key"), &(&1.id in ["fast", "default", "slow"]))
+
+      refute Enum.any?(
+               Router.list_models(key: "work-key"),
+               &(&1.id in ["fast", "default", "slow"])
+             )
+
       refute Enum.any?(Router.list_models(), &(&1.id in ["fast", "default", "slow"]))
     end
+
     test "exposes each backing model's metadata" do
       models = Map.new(Router.list_models(key: "personal-key"), &{&1.id, &1})
 
       assert models["fast"].owned_by == "openrouter"
-      assert models["fast"].limits == %{context: 131_072, output: 16_000}
+      assert models["fast"].limits == %{context: 163_840, output: 16_000}
       assert models["default"].owned_by == "openai"
       assert models["default"].limits == %{context: 128_000, output: 16_384}
       assert models["slow"].owned_by == "openai"
       assert models["slow"].limits == %{context: 128_000, output: 16_384}
     end
-    test "preserves Copilot backing metadata for aliases" do
-      assert {:ok, alias_deployment, _} = Router.resolve_model("copilot", key: "work-key")
-      assert {:ok, model_deployment, _} = Router.resolve_model("copilot-test", key: "work-key")
 
-      assert alias_deployment.provider_type == :github_copilot
-      assert alias_deployment.upstream_model == model_deployment.upstream_model
-      assert alias_deployment.context == model_deployment.context
-      assert alias_deployment.output_limit == model_deployment.output_limit
-
+    test "aliases inherit complete backing discovery metadata" do
       models = Map.new(Router.list_models(key: "work-key"), &{&1.id, &1})
-      assert models["copilot"].limits == models["copilot-test"].limits
-      assert models["copilot"].owned_by == models["copilot-test"].owned_by
+
+      for alias_name <- ["copilot", "luna"] do
+        alias_model = models[alias_name]
+        backing_model = models["copilot-test"]
+
+        assert alias_model.id == alias_name
+        assert backing_model.id == "copilot-test"
+        assert alias_model == %{backing_model | id: alias_name}
+      end
+
+      # Resolution still routes through the alias while keeping the backing identity internal.
+      assert {:ok, alias_deployment, _} = Router.resolve_model("luna", key: "work-key")
+      assert {:ok, model_deployment, _} = Router.resolve_model("copilot-test", key: "work-key")
+      assert alias_deployment.name == "luna"
+      assert alias_deployment.upstream_model == model_deployment.upstream_model
+      assert alias_deployment.metadata == model_deployment.metadata
     end
   end
 

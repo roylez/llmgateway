@@ -6,6 +6,7 @@ keys:
     value: test-work-key-value
     aliases:
       copilot: copilot-test
+      luna: copilot-test
   - name: personal-key
     value: test-personal-key-value
     aliases:
@@ -77,7 +78,7 @@ models:
     keys:
       - work-key
     models:
-      - copilot-test:gpt-5.6-terra
+      - copilot-test:gpt-5.6-luna
 
 fallbacks:
   deepseek-v4-flash:

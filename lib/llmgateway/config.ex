@@ -114,7 +114,9 @@ defmodule Llmgateway.Config do
     Enum.reduce_while(keys, :ok, fn
       entry, :ok when is_map(entry) ->
         case Map.fetch(entry, "aliases") do
-          :error -> {:cont, :ok}
+          :error ->
+            {:cont, :ok}
+
           {:ok, aliases} ->
             case validate_aliases(aliases) do
               :ok -> {:cont, :ok}
@@ -122,7 +124,8 @@ defmodule Llmgateway.Config do
             end
         end
 
-      _, :ok -> {:cont, :ok}
+      _, :ok ->
+        {:cont, :ok}
     end)
   end
 
@@ -372,14 +375,26 @@ defmodule Llmgateway.Config do
         upstream_model = resolve_upstream_model(provider.type, model_id)
         name = m["name"] || model_id
 
-        {context, output_limit, path} =
+        metadata =
           case LLMDB.model({provider.type, upstream_model}) do
-            {:ok, metadata} ->
-              {metadata.limits.context, metadata.limits.output, get_in(metadata.execution, [:text, :path])}
+            {:ok, model_metadata} ->
+              %{
+                limits: model_metadata.limits,
+                capabilities: model_metadata.capabilities,
+                modalities: model_metadata.modalities,
+                execution: model_metadata.execution,
+                extra: model_metadata.extra
+              }
 
             _ ->
-              {nil, nil, nil}
+              nil
           end
+
+        limits = metadata && metadata.limits
+
+        context = limits && limits.context
+        output_limit = limits && limits.output
+        path = metadata && get_in(metadata.execution, [:text, :path])
 
         {:ok,
          %{
@@ -391,7 +406,8 @@ defmodule Llmgateway.Config do
            priority: m["priority"],
            context: context,
            output_limit: output_limit,
-           path: path
+           path: path,
+           metadata: metadata
          }}
       end
     end)

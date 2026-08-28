@@ -22,6 +22,8 @@ defmodule Llmgateway.Deployment do
     :context,
     # output limit from llm_db model metadata
     :output_limit,
+    # normalized LLMDB discovery metadata (limits, capabilities, modalities, execution, extra)
+    :metadata,
     # request path from llm_db execution metadata (nil when unknown)
     :path
   ]
@@ -33,8 +35,9 @@ defmodule Llmgateway.Deployment do
           upstream_model: String.t(),
           api_key: String.t() | nil,
           base_url: String.t(),
-          context: non_neg_integer(),
-          output_limit: non_neg_integer(),
+          context: non_neg_integer() | nil,
+          output_limit: non_neg_integer() | nil,
+          metadata: map() | nil,
           path: String.t() | nil
         }
 end

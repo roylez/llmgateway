@@ -59,46 +59,19 @@ defmodule Llmgateway.Server do
 
   get "/models" do
     models = Llmgateway.list_models(key: conn.assigns[:key_name])
-
-    data =
-      Enum.map(models, fn m ->
-        context = Map.get(m.limits, :context)
-        output = Map.get(m.limits, :output)
-
-        %{
-          "id" => m.id,
-          "object" => "model",
-          "created" => 0,
-          "owned_by" => m.owned_by,
-          "limits" => m.limits,
-          "context_window" => context,
-          "max_tokens" => output
-        }
-      end)
-
+    data = Enum.map(models, &serialize_model/1)
     send_json(conn, 200, %{"object" => "list", "data" => data})
   end
 
   get "/models/:model_id" do
     case Llmgateway.Router.resolve_model(model_id, key: conn.assigns[:key_name]) do
       {:ok, deployment, _fallbacks} ->
-        send_json(conn, 200, %{
-          "id" => deployment.name,
-          "object" => "model",
-          "created" => 0,
-          "owned_by" => Atom.to_string(deployment.provider_type),
-          "limits" => %{"context" => deployment.context, "output" => deployment.output_limit},
-          "context_window" => deployment.context,
-          "max_tokens" => deployment.output_limit
-        })
+        send_json(conn, 200, serialize_model(Llmgateway.Router.discovery_metadata(deployment)))
 
       {:error, :not_found} ->
         send_json(conn, 404, error_body("Model '#{model_id}' not found", "not_found"))
 
       {:error, :forbidden} ->
-        send_json(conn, 403, error_body("Access denied to '#{model_id}'", "access_forbidden"))
-
-      {:error, :forbidden, _fallbacks} ->
         send_json(conn, 403, error_body("Access denied to '#{model_id}'", "access_forbidden"))
     end
   end
@@ -110,26 +83,33 @@ defmodule Llmgateway.Server do
 
     data =
       Enum.map(models, fn m ->
-        context = Map.get(m.limits, :context)
-        output = Map.get(m.limits, :output)
+        discovery = serialize_model(m)
+        limits = discovery["limits"]
+        context = limits[:context]
+        output = limits[:output]
 
         %{
-          "id" => m.id,
-          "model_name" => m.id,
+          "id" => discovery["id"],
+          "model_name" => discovery["id"],
           "object" => "model",
           "created" => 0,
-          "owned_by" => m.owned_by,
+          "owned_by" => discovery["owned_by"],
           "mode" => "chat",
           "max_tokens" => output,
           "context_window" => context,
-          "model_info" => %{
-            "id" => m.id,
-            "max_input_tokens" => context,
-            "max_tokens" => output,
-            "max_completion_tokens" => output,
-            "recommended_max_tokens" => output
-          }
+          "reasoning" => discovery["reasoning"],
+          "model_info" =>
+            %{
+              "id" => discovery["id"],
+              "max_input_tokens" => context,
+              "max_tokens" => output,
+              "max_completion_tokens" => output,
+              "recommended_max_tokens" => output,
+              "reasoning" => discovery["reasoning"]
+            }
+            |> maybe_put("thinking", discovery["thinking"])
         }
+        |> maybe_put("thinking", discovery["thinking"])
       end)
 
     send_json(conn, 200, %{"data" => data})
@@ -707,7 +687,6 @@ defmodule Llmgateway.Server do
 
   # ── Plugs ─────────────────────────────────────────────────
 
-
   defp parse_body(conn, _opts) do
     case Plug.Conn.get_req_header(conn, "content-type") do
       [ct] ->
@@ -816,6 +795,46 @@ defmodule Llmgateway.Server do
         conn
     end
   end
+
+  defp serialize_model(m) do
+    limits = m.limits || %{}
+
+    %{
+      "id" => m.id,
+      "object" => "model",
+      "created" => 0,
+      "owned_by" => m.owned_by,
+      "limits" => limits,
+      "context_window" => limits[:context],
+      "max_tokens" => limits[:output],
+      "capabilities" => m.capabilities,
+      "modalities" => m.modalities,
+      "execution" => m.execution,
+      "extra" => m.extra,
+      "reasoning" => reasoning_enabled?(m.capabilities)
+    }
+    |> maybe_put("thinking", thinking_projection(m.extra))
+  end
+
+  defp reasoning_enabled?(%{reasoning: %{enabled: enabled}}), do: enabled == true
+  defp reasoning_enabled?(_), do: false
+
+  defp thinking_projection(extra) when is_map(extra) do
+    extra
+    |> Map.get("reasoning_options", [])
+    |> Enum.find_value(fn
+      %{"type" => "effort", "values" => values} when is_list(values) ->
+        %{mode: "effort", efforts: values -- ["none"]}
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp thinking_projection(_), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp error_body(message, type, details \\ nil) do
     error = %{"message" => message, "type" => type}

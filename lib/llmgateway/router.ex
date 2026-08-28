@@ -17,6 +17,11 @@ defmodule Llmgateway.Router do
 
   alias Llmgateway.Deployment
 
+  @doc "Build discovery metadata for a resolved deployment."
+  def discovery_metadata(%Deployment{} = deployment) do
+    model_metadata(deployment.name, deployment)
+  end
+
   # ── Client API ────────────────────────────────────────────
 
   @doc "Start the router with a parsed config map."
@@ -114,7 +119,8 @@ defmodule Llmgateway.Router do
           [] ->
             []
 
-          [m | _] -> [model_metadata(name, live_metadata(m))]
+          [m | _] ->
+            [model_metadata(name, live_metadata(m))]
         end
       end)
 
@@ -133,11 +139,19 @@ defmodule Llmgateway.Router do
   end
 
   defp model_metadata(name, model) do
+    metadata = model.metadata || %{}
+
+    limits =
+      Map.merge(metadata[:limits] || %{}, %{context: model.context, output: model.output_limit})
+
     %{
       id: name,
-      object: "model",
       owned_by: Atom.to_string(model.provider_type),
-      limits: %{context: model.context, output: model.output_limit}
+      limits: limits,
+      capabilities: metadata[:capabilities],
+      modalities: metadata[:modalities],
+      execution: metadata[:execution],
+      extra: metadata[:extra]
     }
   end
 
@@ -175,8 +189,7 @@ defmodule Llmgateway.Router do
       key_name = key["name"]
       aliases = Map.get(key, "aliases", %{})
 
-      Enum.reduce(aliases, {valid, invalid}, fn {alias_name, backing_name},
-                                                {valid, invalid} ->
+      Enum.reduce(aliases, {valid, invalid}, fn {alias_name, backing_name}, {valid, invalid} ->
         accessible =
           case Map.get(models, backing_name) do
             nil -> false
@@ -191,8 +204,12 @@ defmodule Llmgateway.Router do
           {valid,
            Map.update(invalid, key_name, MapSet.new([alias_name]), &MapSet.put(&1, alias_name))}
         else
-          {Map.update(valid, key_name, %{alias_name => backing_name},
-             &Map.put(&1, alias_name, backing_name)), invalid}
+          {Map.update(
+             valid,
+             key_name,
+             %{alias_name => backing_name},
+             &Map.put(&1, alias_name, backing_name)
+           ), invalid}
         end
       end)
     end)
@@ -204,8 +221,12 @@ defmodule Llmgateway.Router do
 
   defp resolve_deployments(name, key_name, state) do
     case alias_target(name, key_name, state) do
-      {:ok, backing_name} -> resolve_deployments_for(name, backing_name, key_name, state)
-      :invalid -> {:error, :not_found}
+      {:ok, backing_name} ->
+        resolve_deployments_for(name, backing_name, key_name, state)
+
+      :invalid ->
+        {:error, :not_found}
+
       :ordinary ->
         if is_map_key(state.models, name) do
           resolve_deployments_for(name, name, key_name, state)
@@ -265,12 +286,23 @@ defmodule Llmgateway.Router do
   defp order_by_priority(configs) do
     Enum.sort_by(configs, & &1.priority, :desc)
   end
-  defp live_metadata(%{provider_type: :github_copilot, provider_name: provider_name, upstream_model: model} = config) do
+
+  defp live_metadata(
+         %{provider_type: :github_copilot, provider_name: provider_name, upstream_model: model} =
+           config
+       ) do
     server = String.to_atom("github_device_#{provider_name}")
 
     case Process.whereis(server) && Llmgateway.Auth.GitHubDevice.get_model_metadata(server, model) do
-      %{context: context, output: output} -> %{config | context: context || config.context, output_limit: output || config.output_limit}
-      _ -> config
+      %{context: context, output: output} ->
+        %{
+          config
+          | context: context || config.context,
+            output_limit: output || config.output_limit
+        }
+
+      _ ->
+        config
     end
   end
 
@@ -294,6 +326,7 @@ defmodule Llmgateway.Router do
         base_url: provider.base_url,
         context: model_config.context,
         output_limit: model_config.output_limit,
+        metadata: Map.get(model_config, :metadata),
         path: model_config.path
       }
 
@@ -306,5 +339,4 @@ defmodule Llmgateway.Router do
   defp find_fallbacks(model_name, %{fallbacks: fallbacks}) do
     Map.get(fallbacks, model_name) || Map.get(fallbacks, "*") || []
   end
-
 end

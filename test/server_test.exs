@@ -109,14 +109,18 @@ defmodule Llmgateway.ServerTest do
     end
 
     test "returns alias metadata and model info limits" do
-      conn = call(:get, "/v1/models/fast", nil, [{"authorization", "Bearer test-personal-key-value"}])
+      conn =
+        call(:get, "/v1/models/fast", nil, [{"authorization", "Bearer test-personal-key-value"}])
+
       body = json_response(conn)
 
       assert body["id"] == "fast"
       assert is_integer(body["limits"]["context"])
       assert is_integer(body["limits"]["output"])
 
-      info = call(:get, "/v1/model/info", nil, [{"authorization", "Bearer test-personal-key-value"}])
+      info =
+        call(:get, "/v1/model/info", nil, [{"authorization", "Bearer test-personal-key-value"}])
+
       fast = Enum.find(json_response(info)["data"], &(&1["id"] == "fast"))
       assert is_integer(fast["context_window"])
       assert is_integer(fast["max_tokens"])
@@ -126,12 +130,46 @@ defmodule Llmgateway.ServerTest do
       assert fast["model_info"]["max_completion_tokens"] == fast["max_tokens"]
       assert fast["model_info"]["recommended_max_tokens"] == fast["max_tokens"]
     end
-  end
+
+    test "exposes Luna metadata through its Copilot alias" do
+      headers = [{"authorization", "Bearer test-work-key-value"}]
+
+      alias_body = json_response(call(:get, "/v1/models/luna", nil, headers))
+      backing_body = json_response(call(:get, "/v1/models/copilot-test", nil, headers))
+
+      assert alias_body == %{backing_body | "id" => "luna"}
+      assert backing_body["id"] == "copilot-test"
+
+      assert %{
+               "id" => "luna",
+               "reasoning" => true,
+               "thinking" => %{
+                 "mode" => "effort",
+                 "efforts" => ["low", "medium", "high", "xhigh", "max"]
+               }
+             } = alias_body
+
+      models = json_response(call(:get, "/v1/models", nil, headers))["data"]
+      assert Enum.find(models, &(&1["id"] == "luna")) == alias_body
+
+      info = json_response(call(:get, "/v1/model/info", nil, headers))["data"]
+      luna = Enum.find(info, &(&1["id"] == "luna"))
+      assert luna["model_name"] == "luna"
+      assert luna["model_info"]["id"] == "luna"
+      assert luna["reasoning"] == true
+      assert luna["thinking"] == alias_body["thinking"]
+      assert luna["model_info"]["reasoning"] == true
+      assert luna["model_info"]["thinking"] == alias_body["thinking"]
+    end
 
     test "matches each alias metadata to its backing model" do
       headers = [{"authorization", "Bearer test-personal-key-value"}]
 
-      alias_ids = %{"fast" => "deepseek-v4-flash", "default" => "gpt-4o-mini", "slow" => "tied-model"}
+      alias_ids = %{
+        "fast" => "deepseek-v4-flash",
+        "default" => "gpt-4o-mini",
+        "slow" => "tied-model"
+      }
 
       for {alias_id, model_id} <- alias_ids do
         alias_body = json_response(call(:get, "/v1/models/#{alias_id}", nil, headers))
@@ -141,6 +179,7 @@ defmodule Llmgateway.ServerTest do
         assert alias_body["owned_by"] == model_body["owned_by"]
       end
     end
+  end
 
   describe "authentication" do
     test "rejects invalid key" do
