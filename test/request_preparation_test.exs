@@ -44,6 +44,7 @@ defmodule Llmgateway.RequestPreparationTest do
   use ExUnit.Case
 
   alias Llmgateway.{Deployment, Provider, Stream}
+  alias Llmgateway.Auth
 
   setup do
     {:ok, server} =
@@ -183,6 +184,46 @@ defmodule Llmgateway.RequestPreparationTest do
     assert chat_body["stream"] == true
     assert chat_body["provider"] == %{"preferred_max_latency" => %{"p50" => 2}}
     refute Map.has_key?(chat_body, "input")
+  end
+
+  test "Auth.prepare_request clamps chat completions reasoning_effort to the model's ladder", %{
+    base_url: base_url
+  } do
+    deployment = %{
+      deployment(base_url, "/chat/completions")
+      | metadata: %{
+          extra: %{
+            "reasoning_options" => [%{"type" => "effort", "values" => ["low", "high", "max"]}]
+          }
+        }
+    }
+
+    # "xhigh" is unsupported by kimi-k3: it clamps to the nearest supported
+    # level. It sits between "high" and "max"; ties resolve upward, so "max".
+    body = %{
+      "model" => "kimi-k3",
+      "messages" => [%{"role" => "user", "content" => "Hello"}],
+      "reasoning_effort" => "xhigh"
+    }
+
+    assert {:ok, _req, "/chat/completions", request_body, false} =
+             Auth.prepare_request(deployment, body, 30_000)
+
+    assert request_body["reasoning_effort"] == "max"
+
+    # Supported values pass through unchanged.
+    for effort <- ["low", "high", "max"] do
+      assert {:ok, _req, _url, request_body, false} =
+               Auth.prepare_request(deployment, %{body | "reasoning_effort" => effort}, 30_000)
+
+      assert request_body["reasoning_effort"] == effort
+    end
+
+    # Unknown metadata leaves the client's effort untouched.
+    assert {:ok, _req, _url, request_body, false} =
+             Auth.prepare_request(deployment(base_url, "/chat/completions"), body, 30_000)
+
+    assert request_body["reasoning_effort"] == "xhigh"
   end
 
   defp deployment(base_url, path, provider_type \\ :openai) do

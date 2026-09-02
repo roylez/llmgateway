@@ -380,7 +380,13 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     "max" => 6
   }
 
-  defp clamp_effort(effort, allowed) when is_list(allowed) and allowed != [] do
+  @doc """
+  Clamp a requested effort to the model's supported ladder.
+
+  Unknown or unsupported efforts are clamped to the nearest supported level.
+  When the ladder is unknown or empty, the effort passes through unchanged.
+  """
+  def clamp_effort(effort, allowed) when is_list(allowed) and allowed != [] do
     if effort in allowed do
       effort
     else
@@ -396,7 +402,8 @@ defmodule Llmgateway.Convert.ResponsesAPI do
     end
   end
 
-  defp clamp_effort(effort, _), do: effort
+  # Unknown or empty ladders pass the client's effort through unchanged.
+  def clamp_effort(effort, _), do: effort
 
   # ── Response helpers ──────────────────────────────────────
 

@@ -57,7 +57,7 @@ defmodule Llmgateway.Auth do
   # Keep provider-specific request tuning at this shared outbound boundary.
   defp apply_provider_tuning(
          body,
-         %Deployment{provider_type: :openrouter},
+         %Deployment{provider_type: :openrouter} = deployment,
          "/chat/completions"
        ) do
     provider =
@@ -65,10 +65,28 @@ defmodule Llmgateway.Auth do
       |> Map.get("provider", %{})
       |> Map.put("preferred_max_latency", %{"p50" => 2})
 
-    Map.put(body, "provider", provider)
+    body
+    |> Map.put("provider", provider)
+    |> clamp_reasoning_effort(deployment)
+  end
+
+  # Chat Completions deployments get the same reasoning_effort clamping as
+  # /responses instead of sending an unsupported value upstream.
+  defp apply_provider_tuning(body, %Deployment{} = deployment, "/chat/completions") do
+    clamp_reasoning_effort(body, deployment)
   end
 
   defp apply_provider_tuning(body, _deployment, _url), do: body
+
+  defp clamp_reasoning_effort(body, deployment) do
+    case {allowed_efforts(deployment), body["reasoning_effort"]} do
+      {allowed, effort} when is_list(allowed) and is_binary(effort) ->
+        Map.put(body, "reasoning_effort", ResponsesAPI.clamp_effort(effort, allowed))
+
+      _ ->
+        body
+    end
+  end
 
   # Extract the model's supported reasoning-effort ladder from canonical
   # LLMDB metadata (extra.reasoning_options). Returns nil when unknown so the
