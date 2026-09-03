@@ -273,7 +273,8 @@ defmodule Llmgateway.Router.Core do
         context: model_config.context,
         output_limit: model_config.output_limit,
         metadata: Map.get(model_config, :metadata),
-        path: model_config.path
+        path: model_config.path,
+        runtime: Llmgateway.ProviderRegistry.github_device(model_config.provider_name)
       }
 
       {:ok, deployment}

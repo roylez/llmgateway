@@ -149,8 +149,9 @@ defmodule Llmgateway.Router do
 
   defp request_live_limits(state) do
     for {provider_name, provider} <- state.providers,
-        provider[:type] == :github_copilot do
-      server = String.to_atom("github_device_#{provider_name}")
+        provider[:type] == :github_copilot,
+        server = Llmgateway.ProviderRegistry.github_device(provider_name),
+        server != nil do
       GitHubDevice.request_live_limits(server)
     end
   end

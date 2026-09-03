@@ -190,6 +190,28 @@ defmodule Llmgateway.RouterTest do
       assert {:error, :not_found} = Router.resolve_model("tied-model")
     end
   end
+
+  describe "copilot runtime resolution" do
+    test "resolved copilot deployments carry the registered device server" do
+      # The fixture's copilot-main provider has no auth server running in
+      # tests, so its deployment must resolve with runtime: nil (request
+      # degrades to the configured path instead of crashing).
+      assert {:ok, deployment, _} = Router.resolve_model("copilot-test", key: "work-key")
+      assert deployment.runtime == nil
+
+      # Registering a device server under the provider name makes subsequent
+      # resolutions carry it, so Auth never has to reconstruct an atom name.
+      start_supervised!(
+        {Llmgateway.Auth.GitHubDevice,
+         name: {:via, Registry, {Llmgateway.ProviderRegistry, "copilot-main"}},
+         data_dir:
+           Path.join(System.tmp_dir!(), "llmgateway_rt_#{System.unique_integer([:positive])}")}
+      )
+
+      assert {:ok, deployment, _} = Router.resolve_model("copilot-test", key: "work-key")
+      assert deployment.runtime == {:via, Registry, {Llmgateway.ProviderRegistry, "copilot-main"}}
+    end
+  end
   describe "list_models/1" do
     test "lists unrestricted models without key filter" do
       models = Router.list_models()
