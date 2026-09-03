@@ -325,7 +325,7 @@ Use directly in Elixir without the HTTP server — omit `server.port` from confi
 {:ok, _} = Llmgateway.Router.start_link(config)
 
 # Generate text
-{:ok, response} = Llmgateway.generate_text("deepseek-v3", %{
+{:ok, response, _deployment} = Llmgateway.generate_text("deepseek-v3", %{
   "messages" => [%{"role" => "user", "content" => "Hello!"}]
 }, key: "dev")
 

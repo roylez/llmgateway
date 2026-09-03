@@ -198,9 +198,9 @@ defmodule Llmgateway.Server do
 
   defp handle_completion(conn, model_name, body, key_name, app) do
     case generate_text(model_name, body, key_name, app) do
-      {:ok, response} ->
+      {:ok, response, deployment} ->
         conn
-        |> Responses.put_context_header(model_name, key_name)
+        |> Responses.put_context_header(deployment)
         |> Responses.send_json(200, response)
 
       {:error, %{type: :not_found}} ->

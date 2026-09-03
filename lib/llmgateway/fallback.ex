@@ -107,6 +107,7 @@ defmodule Llmgateway.Fallback do
           if Provider.retryable?(reason) and
                (rest != [] or remaining != [] or match?({:stream, _}, mode)) do
             log_failure(candidate, reason, remaining, opts, mode)
+
             if Provider.cooling?(reason),
               do: Cooldown.record_failure(deployment.provider_name, deployment.upstream_model)
 
@@ -180,8 +181,6 @@ defmodule Llmgateway.Fallback do
   defp execute(deployment, body, opts, {kind, executor}) when kind in [:call, :stream] do
     executor.call(deployment, body, Keyword.drop(opts, [:executor, :seen]))
   end
-
-  defp success(response, _deployment, _original, [], {:call, _}), do: {:ok, response}
 
   defp success(response, _deployment, original, errors, {:call, _}) do
     depth = length(errors)

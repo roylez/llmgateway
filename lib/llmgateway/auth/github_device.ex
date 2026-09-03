@@ -102,6 +102,16 @@ defmodule Llmgateway.Auth.GitHubDevice do
   def list_known_models(server \\ __MODULE__) do
     GenServer.call(server, :list_known_models, 5_000)
   end
+
+  @doc """
+  Publish the current model-limits snapshot to the Router without blocking
+  the caller. The server replies by cast as soon as it can; if the Router is
+  not running, the snapshot is simply not published.
+  """
+  def request_live_limits(server \\ __MODULE__) do
+    GenServer.cast(server, :publish_live_limits)
+  end
+
   # ── Server callbacks ──────────────────────────────────────
 
   @impl true
@@ -142,9 +152,12 @@ defmodule Llmgateway.Auth.GitHubDevice do
         Logger.info("[#{state.provider_name}] Using cached Copilot token")
 
         state =
-          if state.model_endpoints && state.model_metadata,
-            do: schedule_refresh(state),
-            else: fetch_model_endpoints(state) |> schedule_refresh()
+          if state.model_endpoints && state.model_metadata do
+            publish_live_limits(state)
+            schedule_refresh(state)
+          else
+            fetch_model_endpoints(state) |> schedule_refresh()
+          end
 
         {:noreply, state}
 
@@ -233,6 +246,16 @@ defmodule Llmgateway.Auth.GitHubDevice do
     {:reply, known, state}
   end
 
+  defp publish_live_limits(%{provider_name: provider_name} = state) do
+    Llmgateway.Router.cast_live_limits(provider_name, state.model_metadata || %{})
+  end
+
+  @impl true
+  def handle_cast(:publish_live_limits, state) do
+    publish_live_limits(state)
+    {:noreply, state}
+  end
+
   @impl true
   def handle_cast({:device_flow_result_eager, {:ok, access_token}}, state) do
     Logger.info("[#{state.provider_name}] Device flow successful")
@@ -243,7 +266,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
     case refresh_api_key(state) do
       {:ok, _api_key, new_state} ->
         Logger.info("[#{state.provider_name}] Copilot API key obtained")
-        {:noreply, new_state}
+        {:noreply, fetch_model_endpoints(new_state)}
 
       {:error, reason} ->
         Logger.warning("[#{state.provider_name}] API key exchange failed: #{inspect(reason)}")
@@ -465,7 +488,10 @@ defmodule Llmgateway.Auth.GitHubDevice do
         metadata = Map.new(models, &{&1["id"], parse_model_metadata(&1)})
         save_model_endpoints(state, endpoints)
         Logger.debug("[#{state.provider_name}] Cached #{map_size(endpoints)} model endpoints")
-        %{state | model_endpoints: endpoints, model_metadata: metadata}
+
+        state = %{state | model_endpoints: endpoints, model_metadata: metadata}
+        publish_live_limits(state)
+        state
 
       {:ok, %{status: status}} ->
         Logger.warning("[#{state.provider_name}] Failed to fetch models (#{status})")
@@ -480,7 +506,10 @@ defmodule Llmgateway.Auth.GitHubDevice do
   @doc false
   def parse_model_metadata(model) do
     limits = get_in(model, ["capabilities", "limits"]) || %{}
-    context = first_integer(limits, ["max_context_window_tokens", "context_window", "context_length"])
+
+    context =
+      first_integer(limits, ["max_context_window_tokens", "context_window", "context_length"])
+
     output = first_integer(limits, ["max_output_tokens", "max_tokens", "output_limit"])
 
     if context || output, do: %{context: context, output: output}, else: nil

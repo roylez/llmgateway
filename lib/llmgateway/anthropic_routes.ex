@@ -10,11 +10,11 @@ defmodule Llmgateway.AnthropicRoutes do
 
   def handle_completion(conn, model_name, canonical_body, key_name, app) do
     case generate_text(model_name, canonical_body, key_name, app) do
-      {:ok, response} ->
+      {:ok, response, deployment} ->
         anthropic_response = Llmgateway.Convert.InboundAnthropic.from_canonical(response)
 
         conn
-        |> Responses.put_context_header(model_name, key_name)
+        |> Responses.put_context_header(deployment)
         |> Responses.send_json(200, anthropic_response)
 
       {:error, %{type: :not_found}} ->

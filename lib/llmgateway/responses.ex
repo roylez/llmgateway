@@ -23,15 +23,13 @@ defmodule Llmgateway.Responses do
     )
   end
 
-  def put_context_header(conn, model_name, key_name) do
-    case Llmgateway.Router.resolve_model(model_name, key: key_name) do
-      {:ok, deployment, _} when is_integer(deployment.context) ->
-        conn
-        |> put_resp_header("x-context-length", Integer.to_string(deployment.context))
-        |> put_resp_header("x-model-name", deployment.upstream_model)
-
-      _ ->
-        conn
+  def put_context_header(conn, deployment) do
+    if is_integer(deployment.context) do
+      conn
+      |> put_resp_header("x-context-length", Integer.to_string(deployment.context))
+      |> put_resp_header("x-model-name", deployment.upstream_model)
+    else
+      conn
     end
   end
 

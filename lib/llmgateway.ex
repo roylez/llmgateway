@@ -31,7 +31,8 @@ defmodule Llmgateway do
   `body` is the request body in OpenAI chat/completions format.
   `opts` may include `:key` for key-based access control and `:app` for request-log attribution.
 
-  Returns `{:ok, response_body}` or `{:error, reason}`.
+  Returns `{:ok, response_body, deployment}` or `{:error, reason}`. `deployment`
+  is the winning `%Llmgateway.Deployment{}` so callers can read its metadata.
   """
   def generate_text(model, body, opts \\ []) do
     key_name = opts[:key]
