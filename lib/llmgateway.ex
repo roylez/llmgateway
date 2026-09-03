@@ -7,8 +7,9 @@ defmodule Llmgateway do
 
   ## Usage
 
-      # Load config and start the router
-      Llmgateway.start("config/config.yaml")
+      # Library mode — load config and start the router
+      {:ok, config} = Llmgateway.Config.load(".config/config.yaml")
+      {:ok, _} = Llmgateway.Router.start_link(config)
 
       # Generate text
       {:ok, response} = Llmgateway.generate_text("deepseek-v4-flash", %{

@@ -343,11 +343,3 @@ end)
 # List models
 models = Llmgateway.list_models(key: "dev")
 ```
-
-## Config Reload
-
-Reload the config without restarting:
-
-```elixir
-Llmgateway.Router.reload(".config/config.yaml")
-```
