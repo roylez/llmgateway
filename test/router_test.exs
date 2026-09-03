@@ -153,6 +153,50 @@ defmodule Llmgateway.RouterTest do
     end
   end
 
+  describe "reload/1" do
+    test "rebuilds state from a new config" do
+      path =
+        Path.join(System.tmp_dir!(), "llmgateway_reload_test_#{System.unique_integer([:positive])}.yaml")
+
+      on_exit(fn -> File.rm(path) end)
+
+      # A config identical to the fixture except one keys entry is renamed.
+      File.write!(path, """
+      server:
+        port: 4000
+      keys:
+        - { name: new-key, value: test-work-key-value }
+        - { name: personal-key, value: test-personal-key-value }
+      providers:
+        - { name: openrouter, type: openrouter, api_key: test-openrouter-key }
+        - { name: openrouter-personal, type: openrouter, api_key: test-openrouter-personal-key }
+        - { name: openai-main, type: openai, api_key: test-openai-key }
+        - { name: copilot-main, type: github_copilot }
+      models:
+        - provider: openrouter
+          keys: [work-key, new-key]
+          models: [deepseek-v4-flash:deepseek/deepseek-chat, work-only:gpt-4o-mini]
+        - provider: openai-main
+          models: [gpt-4o-mini, gpt-4o-alias:gpt-4o-mini]
+      fallbacks:
+        deepseek-v4-flash: [gpt-4o-mini]
+        work-only: [copilot-test]
+      """)
+
+      # Setup loaded the fixture: the token resolves under its original name.
+      assert {:ok, "work-key"} = Router.resolve_key("test-work-key-value")
+
+      assert :ok = Router.reload(path)
+
+      # After the reload the same token resolves under the renamed key.
+      assert {:ok, "new-key"} = Router.resolve_key("test-work-key-value")
+      assert {:ok, "personal-key"} = Router.resolve_key("test-personal-key-value")
+
+      # A model only present in the new config resolves; a dropped one does not.
+      assert {:ok, _deployment, _} = Router.resolve_model("work-only", key: "new-key")
+      assert {:error, :not_found} = Router.resolve_model("tied-model")
+    end
+  end
   describe "list_models/1" do
     test "lists unrestricted models without key filter" do
       models = Router.list_models()
