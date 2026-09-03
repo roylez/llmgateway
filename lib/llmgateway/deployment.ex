@@ -25,7 +25,10 @@ defmodule Llmgateway.Deployment do
     # normalized LLMDB discovery metadata (limits, capabilities, modalities, execution, extra)
     :metadata,
     # request path from llm_db execution metadata (nil when unknown)
-    :path
+    :path,
+    # reference to the provider runtime process (e.g. a GitHub device server),
+    # resolved via the ProviderRegistry; nil when none is running
+    :runtime
   ]
 
   @type t :: %__MODULE__{
@@ -36,8 +39,8 @@ defmodule Llmgateway.Deployment do
           api_key: String.t() | nil,
           base_url: String.t(),
           context: non_neg_integer() | nil,
-          output_limit: non_neg_integer() | nil,
           metadata: map() | nil,
-          path: String.t() | nil
+          path: String.t() | nil,
+          runtime: any() | nil
         }
 end

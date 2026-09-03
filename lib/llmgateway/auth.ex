@@ -110,28 +110,23 @@ defmodule Llmgateway.Auth do
 
   Returns `{:ok, req}` or `{:error, reason}`.
   """
-  def add_headers(req, %Deployment{provider_type: :github_copilot} = d) do
-    server_name = :"github_device_#{d.provider_name}"
+  def add_headers(_req, %Deployment{provider_type: :github_copilot, runtime: nil}),
+    do: {:error, :no_auth_server}
 
-    case Process.whereis(server_name) do
-      nil ->
-        {:error, :no_auth_server}
+  def add_headers(req, %Deployment{provider_type: :github_copilot, runtime: server}) do
+    case Llmgateway.Auth.GitHubDevice.get_token(server) do
+      {:ok, token} ->
+        api_base = Llmgateway.Auth.GitHubDevice.get_api_base(server)
 
-      _pid ->
-        case Llmgateway.Auth.GitHubDevice.get_token(server_name) do
-          {:ok, token} ->
-            api_base = Llmgateway.Auth.GitHubDevice.get_api_base(server_name)
+        {:ok,
+         %{req | url: URI.parse(api_base)}
+         |> Req.Request.put_header("authorization", "Bearer #{token}")
+         |> Req.Request.put_header("copilot-integration-id", "vscode-chat")
+         |> Req.Request.put_header("editor-version", "vscode/1.95.0")
+         |> Req.Request.put_header("user-agent", "GithubCopilot/1.155.0")}
 
-            {:ok,
-             %{req | url: URI.parse(api_base)}
-             |> Req.Request.put_header("authorization", "Bearer #{token}")
-             |> Req.Request.put_header("copilot-integration-id", "vscode-chat")
-             |> Req.Request.put_header("editor-version", "vscode/1.95.0")
-             |> Req.Request.put_header("user-agent", "GithubCopilot/1.155.0")}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -157,13 +152,11 @@ defmodule Llmgateway.Auth do
   end
 
   @doc "Return the endpoint path for a deployment and its model."
-  def request_path(%Deployment{provider_type: :github_copilot} = d) do
-    server_name = :"github_device_#{d.provider_name}"
+  def request_path(%Deployment{provider_type: :github_copilot, runtime: nil}),
+    do: "/chat/completions"
 
-    case Process.whereis(server_name) do
-      nil -> "/chat/completions"
-      _pid -> Llmgateway.Auth.GitHubDevice.get_model_endpoint(server_name, d.upstream_model)
-    end
+  def request_path(%Deployment{provider_type: :github_copilot, runtime: server} = d) do
+    Llmgateway.Auth.GitHubDevice.get_model_endpoint(server, d.upstream_model)
   end
 
   def request_path(%Deployment{path: path}) when is_binary(path), do: path

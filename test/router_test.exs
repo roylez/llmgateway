@@ -285,4 +285,35 @@ defmodule Llmgateway.RouterTest do
                Auth.prepare_request(deployment(%{path: "/chat/completions"}), body, 5_000)
     end
   end
+
+  describe "provider runtime registry" do
+    test "exotic config names do not create atoms" do
+      before = :erlang.system_info(:atom_count)
+
+      exotic_names = [
+        "github-copilot-\u{1F41B}",
+        String.duplicate("long", 40),
+        "with spaces and-dashes",
+        "Elixir.Llmgateway"
+      ]
+
+      for name <- exotic_names do
+        assert Llmgateway.ProviderRegistry.github_device(name) == nil
+      end
+
+      assert :erlang.system_info(:atom_count) == before
+
+      # A registered server stays reachable under the same exotic name via
+      # the registry, still without minting an atom.
+      name = "github-copilot-\u{1F41B}"
+      {:ok, _owner} = Registry.register(Llmgateway.ProviderRegistry, name, :device)
+
+      assert Llmgateway.ProviderRegistry.github_device(name) ==
+               {:via, Registry, {Llmgateway.ProviderRegistry, name}}
+
+      Registry.unregister(Llmgateway.ProviderRegistry, name)
+      assert Llmgateway.ProviderRegistry.github_device(name) == nil
+      assert :erlang.system_info(:atom_count) == before
+    end
+  end
 end

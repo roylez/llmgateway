@@ -291,18 +291,22 @@ defmodule Llmgateway.Router do
          %{provider_type: :github_copilot, provider_name: provider_name, upstream_model: model} =
            config
        ) do
-    server = String.to_atom("github_device_#{provider_name}")
-
-    case Process.whereis(server) && Llmgateway.Auth.GitHubDevice.get_model_metadata(server, model) do
-      %{context: context, output: output} ->
-        %{
-          config
-          | context: context || config.context,
-            output_limit: output || config.output_limit
-        }
-
-      _ ->
+    case Llmgateway.ProviderRegistry.github_device(provider_name) do
+      nil ->
         config
+
+      server ->
+        case Llmgateway.Auth.GitHubDevice.get_model_metadata(server, model) do
+          %{context: context, output: output} ->
+            %{
+              config
+              | context: context || config.context,
+                output_limit: output || config.output_limit
+            }
+
+          _ ->
+            config
+        end
     end
   end
 
@@ -327,7 +331,8 @@ defmodule Llmgateway.Router do
         context: model_config.context,
         output_limit: model_config.output_limit,
         metadata: Map.get(model_config, :metadata),
-        path: model_config.path
+        path: model_config.path,
+        runtime: Llmgateway.ProviderRegistry.github_device(model_config.provider_name)
       }
 
       {:ok, deployment}

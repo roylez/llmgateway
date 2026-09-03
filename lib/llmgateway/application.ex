@@ -12,6 +12,7 @@ defmodule Llmgateway.Application do
       if File.exists?(config_path) do
         case Llmgateway.Config.load(config_path) do
           {:ok, config} ->
+            registry = [Llmgateway.ProviderRegistry]
             auth_servers = github_device_servers(config)
             router = [{Llmgateway.Router, config}]
             server = maybe_start_server(config)
@@ -23,7 +24,7 @@ defmodule Llmgateway.Application do
               validate_copilot_models(config)
             end)
 
-            cooldown ++ auth_servers ++ router ++ server
+            cooldown ++ registry ++ auth_servers ++ router ++ server
 
           {:error, reason} ->
             Logger.warning("Failed to load config from #{config_path}: #{inspect(reason)}")
@@ -61,12 +62,15 @@ defmodule Llmgateway.Application do
     config["providers"]
     |> Enum.filter(fn p -> p.type == :github_copilot end)
     |> Enum.map(fn p ->
-      name = :"github_device_#{p.name}"
-      opts = [provider_name: p.name, data_dir: data_dir, name: name]
+      opts = [
+        provider_name: p.name,
+        data_dir: data_dir,
+        name: {:via, Registry, {Llmgateway.ProviderRegistry, p.name}}
+      ]
 
       Supervisor.child_spec(
         {Llmgateway.Auth.GitHubDevice, opts},
-        id: name
+        id: {:github_device, p.name}
       )
     end)
   end
@@ -75,24 +79,26 @@ defmodule Llmgateway.Application do
     copilot_providers = Enum.filter(config["providers"], &(&1.type == :github_copilot))
 
     for provider <- copilot_providers do
-      server_name = :"github_device_#{provider.name}"
+      case Llmgateway.ProviderRegistry.github_device(provider.name) do
+        nil ->
+          :ok
 
-      if Process.whereis(server_name) do
-        known = Llmgateway.Auth.GitHubDevice.list_known_models(server_name)
+        server ->
+          known = Llmgateway.Auth.GitHubDevice.list_known_models(server)
 
-        if known != [] do
-          for model <- config["models"], model.provider_name == provider.name do
-            unless model.upstream_model in known do
-              suggestion = suggest_similar(model.upstream_model, known)
-              hint = if suggestion, do: " Did you mean '#{suggestion}'?", else: ""
+          if known != [] do
+            for model <- config["models"], model.provider_name == provider.name do
+              unless model.upstream_model in known do
+                suggestion = suggest_similar(model.upstream_model, known)
+                hint = if suggestion, do: " Did you mean '#{suggestion}'?", else: ""
 
-              Logger.warning(
-                "[config] Model '#{model.name}' uses upstream '#{model.upstream_model}' " <>
-                  "which is not available on GitHub Copilot.#{hint}"
-              )
+                Logger.warning(
+                  "[config] Model '#{model.name}' uses upstream '#{model.upstream_model}' " <>
+                    "which is not available on GitHub Copilot.#{hint}"
+                )
+              end
             end
           end
-        end
       end
     end
   end
