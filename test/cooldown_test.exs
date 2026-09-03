@@ -5,8 +5,7 @@ defmodule Llmgateway.CooldownTest do
 
   setup do
     start_supervised!({Cooldown, window_ms: 60_000})
-    {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
-    {:ok, _} = Router.start_link(config)
+    start_supervised!({Router, Config.load!(Path.join(@fixtures_path, "config.yaml"))})
     :ok
   end
 

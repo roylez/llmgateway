@@ -22,6 +22,16 @@ defmodule Llmgateway.Config do
     end
   end
 
+  @doc """
+  Load and parse a config YAML file, raising on error.
+  """
+  def load!(path) do
+    case load(path) do
+      {:ok, config} -> config
+      {:error, reason} -> raise "failed to load config: #{reason}"
+    end
+  end
+
   defp read_yaml(path) do
     case YamlElixir.read_from_file(path) do
       {:ok, content} when is_map(content) -> {:ok, content}

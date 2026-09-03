@@ -14,8 +14,7 @@ defmodule Llmgateway.FallbackTest do
   @fixtures_path "test/fixtures"
 
   setup do
-    {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
-    {:ok, _pid} = Router.start_link(config)
+    start_supervised!({Router, Config.load!(Path.join(@fixtures_path, "config.yaml"))})
     :ok
   end
 
@@ -62,7 +61,10 @@ defmodule Llmgateway.FallbackTest do
 
   test "executes an alias through its backing deployment" do
     body = %{"messages" => [%{"role" => "user", "content" => "hi"}]}
-    Process.put(:call_results, %{{"openrouter-personal", "deepseek/deepseek-chat"} => {:ok, %{"id" => "response"}}})
+
+    Process.put(:call_results, %{
+      {"openrouter-personal", "deepseek/deepseek-chat"} => {:ok, %{"id" => "response"}}
+    })
 
     assert {:ok, deployments, fallbacks} =
              Router.resolve_deployments("fast", key: "personal-key")

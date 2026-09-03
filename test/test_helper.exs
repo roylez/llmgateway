@@ -1,5 +1,6 @@
-# Stop the application to prevent it from managing Router/Bandit
-# Tests start their own Router instances
+# Stop the application to prevent it from managing Router/Bandit at startup.
+# Tests start their own Router instances via start_supervised!/1, so each test
+# gets a fresh, isolated state instead of racing for the globally named process.
 Application.stop(:llmgateway)
 
 # Tests start their own Router instances; the provider registry backs the

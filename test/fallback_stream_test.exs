@@ -15,8 +15,7 @@ defmodule Llmgateway.FallbackStreamTest do
 
   setup do
     start_supervised!({Cooldown, window_ms: 60_000})
-    {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
-    {:ok, _pid} = Router.start_link(config)
+    start_supervised!({Router, Config.load!(Path.join(@fixtures_path, "config.yaml"))})
     :ok
   end
 
@@ -118,10 +117,61 @@ defmodule Llmgateway.FallbackStreamTest do
     refute_received {:stream_call, _, _, _}
   end
 
-  test "expands same-name candidates at each fallback position" do
-    GenServer.stop(Router)
+  defp drain_mailbox do
+    receive do
+      _ -> drain_mailbox()
+    after
+      0 -> :ok
+    end
+  end
 
-    config = %{
+  defp model(name, provider_name, upstream_model, priority) do
+    %{
+      name: name,
+      provider_name: provider_name,
+      provider_type: :openai,
+      upstream_model: upstream_model,
+      priority: priority,
+      context: 1,
+      output_limit: 1,
+      path: "/chat/completions",
+      keys: nil
+    }
+  end
+end
+
+defmodule Llmgateway.FallbackStreamExpansionTest do
+  use ExUnit.Case
+
+  alias Llmgateway.Fallback
+
+  setup do
+    start_supervised!({Llmgateway.Router, custom_config()})
+    :ok
+  end
+
+  test "expands same-name candidates at each fallback position" do
+    Process.put(:stream_results, %{
+      {"primary-a", "primary-a-model"} => {:error, %{type: :server_error}},
+      {"primary-b", "primary-b-model"} => {:error, %{type: :transport_error}},
+      {"secondary-a", "secondary-a-model"} => {:error, %{type: :server_error}},
+      {"secondary-b", "secondary-b-model"} => {:error, %{type: :transport_error}},
+      {"tertiary-a", "tertiary-a-model"} => {:ok, [:tertiary_stream]}
+    })
+
+    assert {:ok, [:tertiary_stream], %{name: "tertiary"}} =
+             Fallback.stream("primary", %{}, executor: Llmgateway.FallbackStreamTest.Executor)
+
+    assert_receive {:stream_call, {"primary-a", "primary-a-model"}, %{}, _}
+    assert_receive {:stream_call, {"primary-b", "primary-b-model"}, %{}, _}
+    assert_receive {:stream_call, {"secondary-a", "secondary-a-model"}, %{}, _}
+    assert_receive {:stream_call, {"secondary-b", "secondary-b-model"}, %{}, _}
+    assert_receive {:stream_call, {"tertiary-a", "tertiary-a-model"}, %{}, _}
+    refute_received {:stream_call, _, _, _}
+  end
+
+  defp custom_config do
+    %{
       "providers" => [
         %{name: "primary-a", api_key: nil, base_url: "https://example.test"},
         %{name: "primary-b", api_key: nil, base_url: "https://example.test"},
@@ -142,34 +192,6 @@ defmodule Llmgateway.FallbackStreamTest do
         "secondary" => ["primary", "tertiary"]
       }
     }
-
-    {:ok, _pid} = Router.start_link(config)
-
-    Process.put(:stream_results, %{
-      {"primary-a", "primary-a-model"} => {:error, %{type: :server_error}},
-      {"primary-b", "primary-b-model"} => {:error, %{type: :transport_error}},
-      {"secondary-a", "secondary-a-model"} => {:error, %{type: :server_error}},
-      {"secondary-b", "secondary-b-model"} => {:error, %{type: :transport_error}},
-      {"tertiary-a", "tertiary-a-model"} => {:ok, [:tertiary_stream]}
-    })
-
-    assert {:ok, [:tertiary_stream], %{name: "tertiary"}} =
-             Fallback.stream("primary", %{}, executor: Llmgateway.FallbackStreamTest.Executor)
-
-    assert_receive {:stream_call, {"primary-a", "primary-a-model"}, %{}, _}
-    assert_receive {:stream_call, {"primary-b", "primary-b-model"}, %{}, _}
-    assert_receive {:stream_call, {"secondary-a", "secondary-a-model"}, %{}, _}
-    assert_receive {:stream_call, {"secondary-b", "secondary-b-model"}, %{}, _}
-    assert_receive {:stream_call, {"tertiary-a", "tertiary-a-model"}, %{}, _}
-    refute_received {:stream_call, _, _, _}
-  end
-
-  defp drain_mailbox do
-    receive do
-      _ -> drain_mailbox()
-    after
-      0 -> :ok
-    end
   end
 
   defp model(name, provider_name, upstream_model, priority) do

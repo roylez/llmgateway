@@ -7,14 +7,7 @@ defmodule Llmgateway.ServerTest do
   @fixtures_path "test/fixtures"
 
   setup do
-    try do
-      if pid = Process.whereis(Router), do: GenServer.stop(pid)
-    catch
-      :exit, _ -> :ok
-    end
-
-    {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
-    {:ok, _pid} = Router.start_link(config)
+    start_supervised!({Router, Config.load!(Path.join(@fixtures_path, "config.yaml"))})
     :ok
   end
 
