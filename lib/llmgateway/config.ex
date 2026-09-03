@@ -100,11 +100,138 @@ defmodule Llmgateway.Config do
         {:error, error} -> [error | errors]
       end
 
+    errors =
+      case validate_duplicate_providers(config["providers"]) do
+        :ok -> errors
+        {:error, error} -> [error | errors]
+      end
+
+    errors =
+      case validate_duplicate_keys(config["keys"]) do
+        :ok -> errors
+        {:error, error} -> [error | errors]
+      end
+
+    errors =
+      case validate_duplicate_model_names(config["models"]) do
+        :ok -> errors
+        {:error, error} -> [error | errors]
+      end
+
+    errors =
+      case validate_auth_required_providers(config["providers"]) do
+        :ok -> errors
+        {:error, error} -> [error | errors]
+      end
+
     if errors == [] do
       {:ok, config}
     else
       {:error, Enum.join(errors, "; ")}
     end
+  end
+
+  # Providers whose upstream requires credentials must not boot with an
+  # unset api_key (missing $VAR). github_copilot authenticates via its own
+  # device-flow token and is exempt.
+  defp validate_auth_required_providers(providers) when is_list(providers) do
+    problems =
+      Enum.flat_map(providers, fn provider ->
+        name = provider["name"]
+        type = provider["type"]
+
+        if missing_api_key?(provider["api_key"]) and provider_requires_auth?(type) do
+          ["provider '#{name}' (type '#{type}') requires an api_key but none is configured"]
+        else
+          []
+        end
+      end)
+
+    case problems do
+      [] -> :ok
+      _ -> {:error, Enum.join(problems, "; ")}
+    end
+  end
+
+  defp provider_requires_auth?(type) when is_binary(type) do
+    case LLMDB.provider(String.to_atom(type)) do
+      {:ok, provider_meta} ->
+        not is_nil(provider_meta.runtime) and not is_nil(provider_meta.runtime.auth)
+
+      {:error, :not_found} ->
+        # Unknown provider types are rejected during enrichment; be lenient here.
+        false
+    end
+  end
+
+  defp provider_requires_auth?(_), do: false
+
+  defp missing_api_key?(value),
+    do: is_nil(value) or (is_binary(value) and String.trim(value) == "")
+
+  defp validate_duplicate_providers(providers) when is_list(providers) do
+    case find_duplicates(Enum.map(providers, & &1["name"])) do
+      [] -> :ok
+      dups -> {:error, "duplicate provider name(s): #{Enum.join(dups, ", ")}"}
+    end
+  end
+
+  defp validate_duplicate_providers(_), do: :ok
+
+  defp validate_duplicate_keys(keys) when is_list(keys) do
+    case find_duplicates(Enum.map(keys, & &1["name"])) do
+      [] -> :ok
+      dups -> {:error, "duplicate key name(s): #{Enum.join(dups, ", ")}"}
+    end
+  end
+
+  defp validate_duplicate_keys(_), do: :ok
+
+  # Models with the same public name on the same provider would collapse into
+  # indistinguishable deployments. Distinct names across different providers
+  # are multi-deployment and intentionally allowed.
+  defp validate_duplicate_model_names(models) when is_list(models) do
+    pairs =
+      Enum.flat_map(models, fn group when is_map(group) ->
+        case Map.get(group, "models") do
+          children when is_list(children) ->
+            Enum.map(children, fn child -> {group["provider"], public_model_name(child)} end)
+
+          _ ->
+            []
+        end
+      end)
+
+    case find_duplicates(pairs) do
+      [] ->
+        :ok
+
+      dups ->
+        message =
+          dups
+          |> Enum.map(fn {provider, name} -> "'#{name}' under provider '#{provider}'" end)
+          |> Enum.join(", ")
+
+        {:error, "duplicate model name(s): #{message}"}
+    end
+  end
+
+  defp validate_duplicate_model_names(_), do: :ok
+
+  defp public_model_name(child) when is_map(child), do: Map.get(child, "name") || child["model"]
+
+  defp public_model_name(child) when is_binary(child) do
+    case String.split(child, ":", parts: 2) do
+      [name, _model] -> name
+      [model] -> model
+    end
+  end
+
+  defp find_duplicates(values) do
+    values
+    |> Enum.frequencies()
+    |> Enum.filter(fn {_, count} -> count > 1 end)
+    |> Enum.map(&elem(&1, 0))
   end
 
   defp validate_keys(nil), do: :ok

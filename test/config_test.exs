@@ -5,6 +5,9 @@ defmodule Llmgateway.ConfigTest do
 
   @fixtures_path "test/fixtures"
 
+  defp tmp_path(name),
+    do: Path.join(System.tmp_dir!(), "config_test_#{System.unique_integer([:positive])}_#{name}")
+
   describe "load/1" do
     test "parses a valid config file" do
       assert {:ok, config} = Config.load(Path.join(@fixtures_path, "config.yaml"))
@@ -58,7 +61,6 @@ defmodule Llmgateway.ConfigTest do
       copilot = Enum.find(config["models"], &(&1.name == "copilot-test"))
       assert copilot.provider_type == :github_copilot
       assert copilot.path == nil
-
     end
 
     test "preserves key aliases" do
@@ -91,7 +93,8 @@ defmodule Llmgateway.ConfigTest do
             - gpt-4o-mini
       """)
 
-      assert {:error, "key aliases must be a map of non-empty alias names to non-empty model names"} =
+      assert {:error,
+              "key aliases must be a map of non-empty alias names to non-empty model names"} =
                Config.load(yaml_path)
     after
       File.rm("test/fixtures/invalid_key_aliases.yaml")
@@ -139,6 +142,206 @@ defmodule Llmgateway.ConfigTest do
       assert Enum.all?(config["models"], &(&1.priority == 10))
     after
       File.rm("test/fixtures/config_model_priority.yaml")
+    end
+
+    test "rejects duplicate provider names" do
+      yaml_path = tmp_path("dup_providers.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+        - name: openai
+          type: openrouter
+          api_key: test-key
+      models:
+        - provider: openai
+          models:
+            - gpt-4o-mini
+      """)
+
+      assert {:error, msg} = Config.load(yaml_path)
+      assert msg =~ "duplicate provider name(s):"
+      assert msg =~ "openai"
+    after
+      File.rm(tmp_path("dup_providers.yaml"))
+    end
+
+    test "rejects duplicate key names" do
+      yaml_path = tmp_path("dup_keys.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+      keys:
+        - name: work-key
+          value: first
+        - name: work-key
+          value: second
+      models:
+        - provider: openai
+          models:
+            - gpt-4o-mini
+      """)
+
+      assert {:error, msg} = Config.load(yaml_path)
+      assert msg =~ "duplicate key name(s):"
+      assert msg =~ "work-key"
+    after
+      File.rm(tmp_path("dup_keys.yaml"))
+    end
+
+    test "rejects duplicate public model names within the same provider" do
+      yaml_path = tmp_path("dup_models.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+      models:
+        - provider: openai
+          models:
+            - first:gpt-4o-mini
+            - first:gpt-4o
+      """)
+
+      assert {:error, msg} = Config.load(yaml_path)
+      assert msg =~ "duplicate model name(s):"
+      assert msg =~ "'first' under provider 'openai'"
+    after
+      File.rm(tmp_path("dup_models.yaml"))
+    end
+
+    test "rejects auth-required provider with unset api_key" do
+      yaml_path = tmp_path("no_key.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+      models:
+        - provider: openai
+          models:
+            - gpt-4o-mini
+      """)
+
+      assert {:error, msg} = Config.load(yaml_path)
+      assert msg =~ "requires an api_key"
+      assert msg =~ "'openai'"
+    after
+      File.rm(tmp_path("no_key.yaml"))
+    end
+
+    test "exempts github_copilot from the api_key requirement" do
+      yaml_path = tmp_path("copilot_no_key.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: copilot-main
+          type: github_copilot
+      models:
+        - provider: copilot-main
+          models:
+            - copilot-test:gpt-5.6-luna
+      """)
+
+      assert {:ok, _} = Config.load(yaml_path)
+    after
+      File.rm(tmp_path("copilot_no_key.yaml"))
+    end
+
+    test "rejects duplicate public model names with map children" do
+      yaml_path = tmp_path("dup_models_map.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+      models:
+        - provider: openai
+          models:
+            - name: shared
+              model: gpt-4o-mini
+            - name: shared
+              model: gpt-4o
+      """)
+
+      assert {:error, msg} = Config.load(yaml_path)
+      assert msg =~ "duplicate model name(s):"
+      assert msg =~ "'shared' under provider 'openai'"
+    after
+      File.rm(tmp_path("dup_models_map.yaml"))
+    end
+
+    test "allows the same public name across different providers (multi-deployment)" do
+      yaml_path = tmp_path("multimodel.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: test-key
+        - name: openrouter
+          type: openrouter
+          api_key: test-key
+      models:
+        - provider: openai
+          models:
+            - shared:gpt-4o-mini
+        - provider: openrouter
+          models:
+            - shared:deepseek/deepseek-chat
+      """)
+
+      assert {:ok, config} = Config.load(yaml_path)
+      assert length(config["models"]) == 2
+    after
+      File.rm(tmp_path("multimodel.yaml"))
+    end
+
+    test "rejects a provider that requires auth when api_key resolves to nil" do
+      yaml_path = tmp_path("missing_auth_key.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: openai
+          type: openai
+          api_key: ""
+      models:
+        - provider: openai
+          models:
+            - gpt-4o-mini
+      """)
+
+      assert {:error, msg} = Config.load(yaml_path)
+      assert msg =~ "provider 'openai' (type 'openai') requires an api_key"
+    after
+      File.rm(tmp_path("missing_auth_key.yaml"))
+    end
+
+    test "does not require api_key for locally-run providers" do
+      yaml_path = tmp_path("local_provider.yaml")
+
+      File.write!(yaml_path, """
+      providers:
+        - name: local
+          type: lmstudio
+      models:
+        - provider: local
+          models:
+            - llama:llama3.2
+      """)
+
+      assert {:ok, config} = Config.load(yaml_path)
+      [provider] = config["providers"]
+      assert is_nil(provider.api_key)
+    after
+      File.rm(tmp_path("local_provider.yaml"))
     end
 
     test "resolves $VAR from environment" do
