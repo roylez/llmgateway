@@ -8,7 +8,7 @@ defmodule Llmgateway.Stream do
 
   require Logger
 
-  alias Llmgateway.{Auth, Convert, Convert.ResponsesAPI, Deployment}
+  alias Llmgateway.{Convert, Convert.ResponsesAPI, Deployment, Upstream}
 
   @doc """
   Execute a streaming request and return an enumerable of OpenAI-format SSE chunks.
@@ -19,48 +19,14 @@ defmodule Llmgateway.Stream do
   Returns `{:ok, stream}` or `{:error, reason}`.
   """
   def call(%Deployment{} = deployment, body, opts \\ []) do
-    timeout = opts[:timeout] || 120_000
+    case Upstream.execute(deployment, body, Keyword.put(opts, :stream, true)) do
+      {:ok, %Req.Response{body: resp_body}, _warnings, is_responses} ->
+        stream = Llmgateway.Stream.build_stream(resp_body, deployment, is_responses, opts[:rid])
+        {:ok, stream}
 
-    {provider_body, _warnings} = Convert.to_provider(deployment, body)
-
-    provider_body =
-      provider_body
-      |> Map.put("model", deployment.upstream_model)
-      |> Map.put("stream", true)
-      |> Map.delete("_llmgateway")
-
-    result =
-      case Auth.prepare_request(deployment, provider_body, timeout) do
-        {:ok, req, url, request_body, is_responses} ->
-          Logger.debug(
-            "[stream] rid=#{opts[:rid] || "-"} send url=#{url} model=#{deployment.upstream_model}"
-          )
-
-          case Req.post(req, url: url, json: request_body, into: :self) do
-            {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
-              stream =
-                Llmgateway.Stream.build_stream(resp.body, deployment, is_responses, opts[:rid])
-
-              {:ok, stream}
-
-            {:ok, %Req.Response{status: status, body: body}} ->
-              error_body = drain_body(body)
-              {:error, classify_error(status, error_body, deployment)}
-
-            {:error, reason} ->
-              {:error, %{type: :transport_error, reason: reason, deployment: deployment.name}}
-          end
-
-        {:error, reason} ->
-          {:error,
-           %{
-             type: :client_error,
-             message: "Auth failed: #{inspect(reason)}",
-             deployment: deployment.name
-           }}
-      end
-
-    result
+      {:error, error} ->
+        {:error, error}
+    end
   end
 
   # ── SSE parsing ───────────────────────────────────────────
@@ -302,49 +268,4 @@ defmodule Llmgateway.Stream do
       Logger.debug(base)
     end
   end
-
-  # ── Error helpers ─────────────────────────────────────────
-
-  defp drain_body(body) when is_binary(body), do: body
-
-  defp drain_body(body) do
-    try do
-      Enum.join(body, "")
-    rescue
-      _ -> ""
-    end
-  end
-
-  defp classify_error(429, body, deployment) do
-    %{
-      type: :rate_limit,
-      status: 429,
-      message: error_slice(body),
-      deployment: deployment.name
-    }
-  end
-
-  defp classify_error(status, body, deployment) when status >= 500 do
-    %{
-      type: :server_error,
-      status: status,
-      message: error_slice(body),
-      deployment: deployment.name
-    }
-  end
-
-  defp classify_error(status, body, deployment) do
-    %{
-      type: :client_error,
-      status: status,
-      message: error_slice(body),
-      deployment: deployment.name
-    }
-  end
-
-  # Upstream status bodies are drained to a string; keep a bounded slice so the
-  # provider's reason (e.g. Copilot's 'Unsupported parameter: …') surfaces in
-  # fallback error details and warnings instead of being discarded.
-  defp error_slice(body) when is_binary(body), do: String.slice(body, 0, 500)
-  defp error_slice(_), do: nil
 end
