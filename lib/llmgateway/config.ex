@@ -153,6 +153,8 @@ defmodule Llmgateway.Config do
     end
   end
 
+  defp validate_auth_required_providers(_), do: :ok
+
   defp provider_requires_auth?(type) when is_binary(type) do
     case LLMDB.provider(String.to_atom(type)) do
       {:ok, provider_meta} ->

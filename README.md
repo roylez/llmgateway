@@ -201,11 +201,21 @@ Every response includes:
 | `x-context-length` | Model's max context window (from llmdb) |
 | `x-model-name` | Upstream model ID actually used |
 
-### Health Check
+### Health Checks
 
 ```bash
+# Liveness — 200 whenever the HTTP server is up
 curl http://localhost:4000/health
+
+# Readiness — 200 only when a valid config is loaded and the router
+# is running; 503 otherwise
+curl http://localhost:4000/ready
 ```
+
+An invalid or missing config file stops boot: the process exits instead
+of serving an empty gateway. Point container/orchestrator liveness probes
+at `/health` and traffic gating (load balancers, healthchecks) at
+`/ready`.
 
 ## API Conversion
 

@@ -13,7 +13,9 @@ defmodule Llmgateway.Server do
   - `GET /v1/model/info` — LiteLLM model info
   - `GET /v1/model_group/info` — LiteLLM model group info
   - `GET /version` — Hermes/vLLM discovery endpoint
-  - `GET /health` — health check
+  - `GET /health` — liveness probe (200 whenever the HTTP server is up)
+  - `GET /ready` — readiness probe (200 only when the runtime snapshot
+    is valid and required children are running; 503 otherwise)
 
   Stub endpoints (501 for POST, empty list for GET, 404 for GET by ID):
   - embeddings, audio, images, rerank, files, batches,
@@ -39,9 +41,19 @@ defmodule Llmgateway.Server do
   plug(:dispatch)
 
   # ── Health ─────────────────────────────────────────────────
-
+  # Liveness: 200 whenever the HTTP server is up.
   get "/health" do
     Responses.send_json(conn, 200, %{"status" => "ok"})
+  end
+
+  # Readiness: 200 only when the runtime snapshot is valid and the
+  # required children (router) are running.
+  get "/ready" do
+    if Llmgateway.Runtime.ready?() do
+      Responses.send_json(conn, 200, %{"status" => "ready"})
+    else
+      Responses.send_json(conn, 503, Responses.error_body("Gateway not ready", "service_unavailable"))
+    end
   end
 
   head "/api/hello" do
@@ -332,10 +344,10 @@ defmodule Llmgateway.Server do
     end
   end
 
-  defp authenticate(%Plug.Conn{halted: true} = conn, _opts), do: conn
-
+  # Health probes bypass authentication; everything else requires a key
+  # (or an open config) and a running router.
   defp authenticate(conn, _opts) do
-    if conn.request_path == "/health" do
+    if conn.request_path in ["/health", "/ready"] do
       assign(conn, :key_name, nil)
     else
       case extract_bearer(conn) do

@@ -8,44 +8,45 @@ defmodule Llmgateway.Application do
   def start(_type, _args) do
     config_path = Application.get_env(:llmgateway, :config_path, ".config/config.yaml")
 
-    children =
-      if File.exists?(config_path) do
-        case Llmgateway.Config.load(config_path) do
-          {:ok, config} ->
-            registry = [Llmgateway.ProviderRegistry]
-            auth_servers = github_device_servers(config)
-            router = [{Llmgateway.Router, config}]
-            server = maybe_start_server(config)
-            cooldown = [Llmgateway.Cooldown.child_spec(window_ms: cooldown_ms(config))]
+    # Boot policy: fail loudly when the config is missing or invalid.
+    # A gateway without a validated config cannot serve traffic, so
+    # starting an empty (or degraded) supervisor would only hide the
+    # failure. The config loads once at boot; hot reload is out of scope.
+    {:ok, config} =
+      case Llmgateway.Config.load(config_path) do
+        {:ok, config} ->
+          {:ok, config}
 
-            # Validate copilot model IDs after /models list is fetched
-            Task.start(fn ->
-              Process.sleep(5_000)
-              validate_copilot_models(config)
-            end)
-
-            cooldown ++ registry ++ auth_servers ++ router ++ server
-
-          {:error, reason} ->
-            Logger.warning("Failed to load config from #{config_path}: #{inspect(reason)}")
-            []
-        end
-      else
-        Logger.warning("Config file #{config_path} not found — starting without router")
-        []
+        {:error, reason} ->
+          raise "invalid config at #{config_path}: #{inspect(reason)}"
       end
 
     Llmgateway.Telemetry.attach_default_logger()
+
+    children =
+      [
+        Llmgateway.ProviderRegistry,
+        {Llmgateway.Runtime, config},
+        Llmgateway.Cooldown.child_spec(window_ms: cooldown_ms(config))
+      ] ++
+        github_device_servers(config) ++
+        [{Llmgateway.Router, config}, validation_task(config)] ++ server_children(config)
 
     opts = [strategy: :one_for_one, name: Llmgateway.Supervisor]
     Supervisor.start_link(children, opts)
   end
 
-  defp cooldown_ms(config) do
-    (get_in(config, ["settings", "cooldown_seconds"]) || 0) * 1000
+  # Delayed Copilot model validation as a supervised task: runs once
+  # (restart: :transient) after the auth servers and router are up.
+  defp validation_task(config) do
+    %{
+      id: :copilot_model_validation,
+      start: {Task, :start_link, [fn -> validate_copilot_models(config) end]},
+      restart: :transient
+    }
   end
 
-  defp maybe_start_server(config) do
+  defp server_children(config) do
     port = get_in(config, ["server", "port"])
 
     if port do
@@ -54,6 +55,10 @@ defmodule Llmgateway.Application do
     else
       []
     end
+  end
+
+  defp cooldown_ms(config) do
+    (get_in(config, ["settings", "cooldown_seconds"]) || 0) * 1000
   end
 
   defp github_device_servers(config) do
@@ -76,6 +81,7 @@ defmodule Llmgateway.Application do
   end
 
   defp validate_copilot_models(config) do
+    Process.sleep(5_000)
     copilot_providers = Enum.filter(config["providers"], &(&1.type == :github_copilot))
 
     for provider <- copilot_providers do

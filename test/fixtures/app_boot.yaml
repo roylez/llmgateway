@@ -1,0 +1,12 @@
+# Minimal config used to boot the application under `mix test`.
+# No `server` section (no HTTP port bound) and no Copilot providers
+# (no network calls). Individual tests manage their own processes.
+providers:
+  - name: openai
+    type: openai
+    api_key: test-openai-key
+
+models:
+  - provider: openai
+    models:
+      - gpt-4o-mini
