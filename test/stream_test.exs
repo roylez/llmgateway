@@ -245,7 +245,7 @@ defmodule Llmgateway.StreamTest do
       assert stats.text_deltas == 1
     end
 
-    test "log_stats warns on empty and reasoning-only streams, not on text" do
+    test "log_stats warns on empty stops and raw-thinking-only streams, not on text" do
       import ExUnit.CaptureLog
 
       base = %{
@@ -262,11 +262,31 @@ defmodule Llmgateway.StreamTest do
         tail: "{}"
       }
 
-      for stats <- [base, %{base | thinking_deltas: 2}] do
-        output = capture_log(fn -> LlmStream.log_stats(deployment(), "rid9", stats, nil) end)
-        assert output =~ "warning", "expected a warning for #{inspect(stats)}"
-        assert output =~ "[stream-stats]"
-      end
+      # True empty stop: no deltas of any kind — upstream returned nothing.
+      empty = capture_log(fn -> LlmStream.log_stats(deployment(), "rid9", base, nil) end)
+      assert empty =~ "warning"
+      assert empty =~ "[stream-stats]"
+
+      # Reasoning-only turn that leaked raw thinking: Claude Code sees nothing.
+      leaked =
+        capture_log(fn ->
+          LlmStream.log_stats(deployment(), "rid9", %{base | thinking_deltas: 2}, nil)
+        end)
+
+      assert leaked =~ "warning"
+
+      # Reasoning converted to visible text is content: quiet debug line.
+      converted =
+        capture_log(fn ->
+          LlmStream.log_stats(
+            deployment(),
+            "rid9",
+            %{base | chunks: 2, text_deltas: 1, thinking_deltas: 0},
+            nil
+          )
+        end)
+
+      refute converted =~ "warning"
 
       ok_output =
         capture_log(fn ->

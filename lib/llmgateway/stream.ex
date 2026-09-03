@@ -241,16 +241,31 @@ defmodule Llmgateway.Stream do
   @doc """
   Log a per-request stream summary.
 
-  Normal streams log one `:debug` line with teardown counts. Streams that
-  completed without any usable assistant content (no text and no tool calls -
-  the "empty stop" signature, including reasoning-only turns) or that dropped
-  undecodable SSE events are logged at `:warning` with the raw upstream SSE
-  tail, so an empty client-facing response is diagnosable from the server log.
+  Normal streams log one `:debug` line with teardown counts. A warning with
+  the raw upstream SSE tail is emitted for streams that dropped undecodable
+  SSE events, or that ended with nothing to show the client:
+
+  - an empty stop — no text, no tool calls, no thinking: the upstream returned
+    nothing at all;
+  - a reasoning-only turn that leaked raw thinking — the model's whole reply
+    stayed in `reasoning_content` and never reached `content`. Harnesses that
+    request reasoning (Codex, opencode) render this fine, so it is only
+    notable, but harnesses that do not (Claude Code) show an empty reply.
+
+  Converted reasoning (`thinking_deltas == 0`) is ordinary text to the client
+  and logs at `:debug` like any other content.
   """
   def log_stats(%Deployment{} = deployment, rid, stats, usage) do
-    # Usable = text or tool calls. Reasoning/thinking alone still leaves the
-    # client with nothing to run, so it counts as an empty stop.
-    empty = stats.text_deltas == 0 and stats.tool_deltas == 0
+    # Usable = text or tool calls. Reasoning the client can see (text_deltas
+    # after conversion) is content; reasoning that stayed raw
+    # (thinking_deltas with no text) leaves reasoning-capable clients a full
+    # reply but shows nothing to harnesses that drop thinking — notable, not
+    # an error. A true empty stop has no deltas of any kind.
+    empty_stop? =
+      stats.text_deltas == 0 and stats.tool_deltas == 0 and stats.thinking_deltas == 0
+
+    raw_thinking_only? =
+      stats.text_deltas == 0 and stats.tool_deltas == 0 and stats.thinking_deltas > 0
 
     base =
       "[stream-stats] rid=#{rid} model=#{deployment.name} " <>
@@ -262,7 +277,7 @@ defmodule Llmgateway.Stream do
         "failures=#{stats.decode_failures} bytes=#{stats.bytes} " <>
         "usage=#{inspect(usage || %{})}"
 
-    if empty or stats.decode_failures > 0 do
+    if stats.decode_failures > 0 or empty_stop? or raw_thinking_only? do
       Logger.warning(base <> "\n  [stream-stats] upstream raw tail: " <> inspect(stats.tail))
     else
       Logger.debug(base)
