@@ -29,7 +29,7 @@ defmodule Llmgateway.Server do
 
   require Logger
 
-  alias Llmgateway.{ClientIdentity, Fallback, Telemetry}
+  alias Llmgateway.{ClientIdentity, Fallback, Responses, SSE, Serializer, Telemetry}
 
   plug(Plug.Logger, log: :debug)
   plug(:parse_body)
@@ -41,38 +41,38 @@ defmodule Llmgateway.Server do
   # ── Health ─────────────────────────────────────────────────
 
   get "/health" do
-    send_json(conn, 200, %{"status" => "ok"})
+    Responses.send_json(conn, 200, %{"status" => "ok"})
   end
 
   head "/api/hello" do
-    send_json(conn, 200, %{})
+    Responses.send_json(conn, 200, %{})
   end
 
   # ── Hermes/vLLM discovery ──────────────────────────────────
 
   get "/version" do
     gateway_version = Application.spec(:llmgateway, :vsn) |> to_string()
-    send_json(conn, 200, %{"version" => gateway_version})
+    Responses.send_json(conn, 200, %{"version" => gateway_version})
   end
 
   # ── Models ─────────────────────────────────────────────────
 
   get "/models" do
     models = Llmgateway.list_models(key: conn.assigns[:key_name])
-    data = Enum.map(models, &serialize_model/1)
-    send_json(conn, 200, %{"object" => "list", "data" => data})
+    data = Enum.map(models, &Serializer.serialize_model/1)
+    Responses.send_json(conn, 200, %{"object" => "list", "data" => data})
   end
 
   get "/models/:model_id" do
     case Llmgateway.Router.resolve_model(model_id, key: conn.assigns[:key_name]) do
       {:ok, deployment, _fallbacks} ->
-        send_json(conn, 200, serialize_model(Llmgateway.Router.discovery_metadata(deployment)))
+        Responses.send_json(conn, 200, Serializer.serialize_model(Llmgateway.Router.discovery_metadata(deployment)))
 
       {:error, :not_found} ->
-        send_json(conn, 404, error_body("Model '#{model_id}' not found", "not_found"))
+        Responses.send_json(conn, 404, Responses.error_body("Model '#{model_id}' not found", "not_found"))
 
       {:error, :forbidden} ->
-        send_json(conn, 403, error_body("Access denied to '#{model_id}'", "access_forbidden"))
+        Responses.send_json(conn, 403, Responses.error_body("Access denied to '#{model_id}'", "access_forbidden"))
     end
   end
 
@@ -80,8 +80,8 @@ defmodule Llmgateway.Server do
 
   get "/model/info" do
     models = Llmgateway.list_models(key: conn.assigns[:key_name])
-    data = Enum.map(models, &serialize_litellm_model_info/1)
-    send_json(conn, 200, %{"data" => data})
+    data = Enum.map(models, &Serializer.serialize_litellm_model_info/1)
+    Responses.send_json(conn, 200, %{"data" => data})
   end
 
   get "/model_group/info" do
@@ -98,7 +98,7 @@ defmodule Llmgateway.Server do
         }
       end)
 
-    send_json(conn, 200, %{"data" => groups})
+    Responses.send_json(conn, 200, %{"data" => groups})
   end
 
   # ── Chat / Completions ────────────────────────────────────
@@ -126,9 +126,9 @@ defmodule Llmgateway.Server do
     canonical = Llmgateway.Convert.InboundAnthropic.to_canonical(body)
 
     if body["stream"] do
-      handle_anthropic_stream(conn, body["model"], canonical, key_name, app, rid)
+      Llmgateway.AnthropicRoutes.handle_stream(conn, body["model"], canonical, key_name, app, rid)
     else
-      handle_anthropic_completion(conn, body["model"], canonical, key_name, app)
+      Llmgateway.AnthropicRoutes.handle_completion(conn, body["model"], canonical, key_name, app)
     end
   end
 
@@ -145,7 +145,7 @@ defmodule Llmgateway.Server do
         [moderation_benign()]
       end
 
-    send_json(conn, 200, %{
+    Responses.send_json(conn, 200, %{
       "id" => "modr-" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower),
       "model" => body["model"] || "text-moderation-stable",
       "results" => results
@@ -167,222 +167,22 @@ defmodule Llmgateway.Server do
           ]
           |> Enum.join()
 
-        send_json(conn, 200, %{
+        Responses.send_json(conn, 200, %{
           "input_tokens" => div(String.length(text), 4),
           "output_tokens" => 0
         })
 
       {:error, :not_found} ->
-        send_json(conn, 404, error_body("Model '#{model_name}' not found", "not_found"))
+        Responses.send_json(conn, 404, Responses.error_body("Model '#{model_name}' not found", "not_found"))
 
       {:error, _} ->
-        send_json(conn, 403, error_body("Access denied to '#{model_name}'", "access_forbidden"))
+        Responses.send_json(conn, 403, Responses.error_body("Access denied to '#{model_name}'", "access_forbidden"))
     end
   end
 
-  # ── Stubs: not-implemented POST routes ─────────────────────
+  # ── Compatibility stubs (embeddings/files/assistants/etc) ─
 
-  post "/embeddings" do
-    not_implemented(conn)
-  end
-
-  post "/audio/speech" do
-    not_implemented(conn)
-  end
-
-  post "/audio/transcriptions" do
-    not_implemented(conn)
-  end
-
-  post "/images/generations" do
-    not_implemented(conn)
-  end
-
-  post "/images/edits" do
-    not_implemented(conn)
-  end
-
-  post "/rerank" do
-    not_implemented(conn)
-  end
-
-  # ── Stubs: collection resources (list/create/get/delete) ──
-
-  # Files
-  get "/files" do
-    empty_list(conn)
-  end
-
-  post "/files" do
-    not_implemented(conn)
-  end
-
-  get "/files/:id" do
-    send_json(conn, 404, error_body("File '#{id}' not found", "not_found"))
-  end
-
-  get "/files/:id/content" do
-    send_json(conn, 404, error_body("File '#{id}' not found", "not_found"))
-  end
-
-  delete "/files/:id" do
-    send_json(conn, 404, error_body("File '#{id}' not found", "not_found"))
-  end
-
-  # Batches
-  get "/batches" do
-    empty_list(conn)
-  end
-
-  post "/batches" do
-    not_implemented(conn)
-  end
-
-  get "/batches/:id" do
-    send_json(conn, 404, error_body("Batch '#{id}' not found", "not_found"))
-  end
-
-  post "/batches/:id/cancel" do
-    send_json(conn, 404, error_body("Batch '#{id}' not found", "not_found"))
-  end
-
-  # Fine-tuning
-  get "/fine_tuning/jobs" do
-    empty_list(conn)
-  end
-
-  post "/fine_tuning/jobs" do
-    not_implemented(conn)
-  end
-
-  get "/fine_tuning/jobs/:id" do
-    send_json(conn, 404, error_body("Fine-tuning job '#{id}' not found", "not_found"))
-  end
-
-  post "/fine_tuning/jobs/:id/cancel" do
-    send_json(conn, 404, error_body("Fine-tuning job '#{id}' not found", "not_found"))
-  end
-
-  # Assistants
-  get "/assistants" do
-    empty_list(conn)
-  end
-
-  post "/assistants" do
-    not_implemented(conn)
-  end
-
-  get "/assistants/:id" do
-    send_json(conn, 404, error_body("Assistant '#{id}' not found", "not_found"))
-  end
-
-  post "/assistants/:id" do
-    send_json(conn, 404, error_body("Assistant '#{id}' not found", "not_found"))
-  end
-
-  delete "/assistants/:id" do
-    send_json(conn, 404, error_body("Assistant '#{id}' not found", "not_found"))
-  end
-
-  # Responses
-  get "/responses" do
-    empty_list(conn)
-  end
-
-  post "/responses" do
-    not_implemented(conn)
-  end
-
-  get "/responses/:id" do
-    send_json(conn, 404, error_body("Response '#{id}' not found", "not_found"))
-  end
-
-  post "/responses/:id/cancel" do
-    send_json(conn, 404, error_body("Response '#{id}' not found", "not_found"))
-  end
-
-  get "/responses/:id/input_items" do
-    send_json(conn, 404, error_body("Response '#{id}' not found", "not_found"))
-  end
-
-  post "/responses/compact" do
-    not_implemented(conn)
-  end
-
-  # Threads
-  get "/threads" do
-    empty_list(conn)
-  end
-
-  post "/threads" do
-    not_implemented(conn)
-  end
-
-  get "/threads/:id" do
-    send_json(conn, 404, error_body("Thread '#{id}' not found", "not_found"))
-  end
-
-  delete "/threads/:id" do
-    send_json(conn, 404, error_body("Thread '#{id}' not found", "not_found"))
-  end
-
-  get "/threads/:thread_id/messages" do
-    send_json(conn, 404, error_body("Thread '#{thread_id}' not found", "not_found"))
-  end
-
-  post "/threads/:thread_id/messages" do
-    send_json(conn, 404, error_body("Thread '#{thread_id}' not found", "not_found"))
-  end
-
-  get "/threads/:thread_id/runs" do
-    send_json(conn, 404, error_body("Thread '#{thread_id}' not found", "not_found"))
-  end
-
-  post "/threads/:thread_id/runs" do
-    send_json(conn, 404, error_body("Thread '#{thread_id}' not found", "not_found"))
-  end
-
-  get "/threads/:thread_id/runs/:run_id" do
-    send_json(conn, 404, error_body("Run '#{run_id}' not found", "not_found"))
-  end
-
-  # Realtime
-  get "/realtime" do
-    not_implemented(conn)
-  end
-
-  get "/realtime/calls" do
-    empty_list(conn)
-  end
-
-  get "/realtime/client_secrets" do
-    empty_list(conn)
-  end
-
-  # ── Unsupported native probes ──────────────────────────────
-
-  get "/api/v1/models" do
-    unsupported_native_probe(conn, "/api/v1/models")
-  end
-
-  get "/api/tags" do
-    unsupported_native_probe(conn, "/api/tags")
-  end
-
-  get "/props" do
-    unsupported_native_probe(conn, "/props")
-  end
-
-  post "/api/show" do
-    unsupported_native_probe(conn, "/api/show")
-  end
-
-  # ── Catch-all ─────────────────────────────────────────────
-
-  match _ do
-    Logger.warning("404 unmatched route: #{conn.method} #{conn.request_path}")
-    send_json(conn, 404, error_body("Not found", "not_found"))
-  end
+  forward "/", to: Llmgateway.StubRoutes
 
   # ── Private: completion routing ────────────────────────────
 
@@ -400,20 +200,20 @@ defmodule Llmgateway.Server do
     case generate_text(model_name, body, key_name, app) do
       {:ok, response} ->
         conn
-        |> put_context_header(model_name, key_name)
-        |> send_json(200, response)
+        |> Responses.put_context_header(model_name, key_name)
+        |> Responses.send_json(200, response)
 
       {:error, %{type: :not_found}} ->
-        send_json(conn, 404, error_body("Model '#{model_name}' not found", "not_found"))
+        Responses.send_json(conn, 404, Responses.error_body("Model '#{model_name}' not found", "not_found"))
 
       {:error, %{type: :forbidden}} ->
-        send_json(conn, 403, error_body("Access denied to '#{model_name}'", "access_forbidden"))
+        Responses.send_json(conn, 403, Responses.error_body("Access denied to '#{model_name}'", "access_forbidden"))
 
       {:error, %{type: :rate_limit} = err} ->
-        send_json(conn, 429, error_body(err[:message] || "Rate limited", "rate_limit_error"))
+        Responses.send_json(conn, 429, Responses.error_body(err[:message] || "Rate limited", "rate_limit_error"))
 
       {:error, %{type: :server_error} = err} ->
-        send_json(conn, 502, error_body(err[:message] || "Upstream error", "upstream_error"))
+        Responses.send_json(conn, 502, Responses.error_body(err[:message] || "Upstream error", "upstream_error"))
 
       {:error, %{type: :all_failed, errors: errors}} ->
         details =
@@ -421,16 +221,16 @@ defmodule Llmgateway.Server do
             %{"model" => name, "status" => e[:status], "reason" => e[:message] || inspect(e)}
           end)
 
-        send_json(conn, 502, error_body("All providers failed", "upstream_error", details))
+        Responses.send_json(conn, 502, Responses.error_body("All providers failed", "upstream_error", details))
 
       {:error, %{type: :transport_error, reason: reason}} ->
-        send_json(conn, 502, error_body("Transport error: #{inspect(reason)}", "upstream_error"))
+        Responses.send_json(conn, 502, Responses.error_body("Transport error: #{inspect(reason)}", "upstream_error"))
 
       {:error, %{message: msg}} ->
-        send_json(conn, 502, error_body(msg, "upstream_error"))
+        Responses.send_json(conn, 502, Responses.error_body(msg, "upstream_error"))
 
       {:error, err} ->
-        send_json(conn, 500, error_body(format_error(err), "internal_error"))
+        Responses.send_json(conn, 500, Responses.error_body(format_error(err), "internal_error"))
     end
   end
 
@@ -453,25 +253,7 @@ defmodule Llmgateway.Server do
           |> send_chunked(200)
 
         {conn, last_usage} =
-          Enum.reduce_while(stream, {conn, nil}, fn
-            :done, {conn, usage} ->
-              # Keep consuming: Llmgateway.Stream appends {:stream_stats, stats}
-              # as the terminal element, which carries the request diagnostics.
-              {:cont, {conn, usage}}
-
-            {:stream_stats, stats}, {conn, usage} ->
-              Llmgateway.Stream.log_stats(deployment, rid, stats, usage)
-              {:halt, {conn, usage}}
-
-            data, {conn, prev_usage} ->
-              this_usage = data["usage"] || prev_usage
-              encoded = "data: #{Jason.encode!(data)}\n\n"
-
-              case chunk(conn, encoded) do
-                {:ok, conn} -> {:cont, {conn, this_usage}}
-                {:error, _} -> {:halt, {conn, this_usage}}
-              end
-          end)
+          SSE.stream_loop(stream, conn, nil, deployment, rid, &reduce_openai/2, & &1)
 
         Telemetry.request_stop(tel, 200, last_usage)
 
@@ -481,10 +263,10 @@ defmodule Llmgateway.Server do
         end
 
       {:error, %{type: :not_found}} ->
-        send_json(conn, 404, error_body("Model '#{model_name}' not found", "not_found"))
+        Responses.send_json(conn, 404, Responses.error_body("Model '#{model_name}' not found", "not_found"))
 
       {:error, %{type: :forbidden}} ->
-        send_json(conn, 403, error_body("Access denied to '#{model_name}'", "access_forbidden"))
+        Responses.send_json(conn, 403, Responses.error_body("Access denied to '#{model_name}'", "access_forbidden"))
 
       {:error, %{type: :all_failed, errors: errors}} ->
         details =
@@ -492,125 +274,16 @@ defmodule Llmgateway.Server do
             %{"model" => name, "status" => e[:status], "reason" => e[:message] || inspect(e)}
           end)
 
-        send_json(conn, 502, error_body("All providers failed", "upstream_error", details))
+        Responses.send_json(conn, 502, Responses.error_body("All providers failed", "upstream_error", details))
 
       {:error, err} ->
-        send_json(conn, 502, error_body(inspect(err), "upstream_error"))
+        Responses.send_json(conn, 502, Responses.error_body(inspect(err), "upstream_error"))
     end
   end
 
-  # ── Anthropic-format handlers ─────────────────────────────
-
-  defp handle_anthropic_completion(conn, model_name, canonical_body, key_name, app) do
-    case generate_text(model_name, canonical_body, key_name, app) do
-      {:ok, response} ->
-        anthropic_response = Llmgateway.Convert.InboundAnthropic.from_canonical(response)
-
-        conn
-        |> put_context_header(model_name, key_name)
-        |> send_json(200, anthropic_response)
-
-      {:error, %{type: :not_found}} ->
-        send_anthropic_error(conn, 404, "not_found_error", "Model '#{model_name}' not found")
-
-      {:error, %{type: :forbidden}} ->
-        send_anthropic_error(conn, 403, "permission_error", "Access denied to '#{model_name}'")
-
-      {:error, %{type: :rate_limit} = err} ->
-        send_anthropic_error(conn, 429, "rate_limit_error", err[:message] || "Rate limited")
-
-      {:error, %{message: msg}} ->
-        send_anthropic_error(conn, 502, "api_error", msg)
-
-      {:error, err} ->
-        send_anthropic_error(conn, 500, "api_error", format_error(err))
-    end
-  end
-
-  defp handle_anthropic_stream(conn, model_name, canonical_body, key_name, app, rid) do
-    started_at = System.monotonic_time(:millisecond)
-
-    case stream_text(model_name, canonical_body, key_name, app, rid) do
-      {:ok, stream, deployment} ->
-        conn =
-          conn
-          |> put_resp_content_type("text/event-stream")
-          |> put_resp_header("cache-control", "no-cache")
-          |> put_resp_header("connection", "keep-alive")
-          |> put_resp_header("x-context-length", to_string(deployment.context || 0))
-          |> put_resp_header("x-model-name", deployment.upstream_model)
-          |> send_chunked(200)
-
-        state = %{rid: rid, started_at: started_at}
-
-        {conn, final_state} =
-          Enum.reduce_while(stream, {conn, state}, fn
-            :done, {conn, state} ->
-              # Keep consuming: {:stream_stats, stats} (with diagnostics) follows.
-              {:cont, {conn, state}}
-
-            {:stream_stats, stats}, {conn, state} ->
-              Llmgateway.Stream.log_stats(deployment, rid, stats, Map.get(state, :usage))
-              {:halt, {conn, state}}
-
-            chunk, {conn, state} ->
-              case Llmgateway.Convert.InboundAnthropic.chunk_to_anthropic_events(chunk, state) do
-                {:ok, events, new_state} ->
-                  usage = chunk["usage"] || Map.get(state, :usage)
-                  new_state = Map.put(new_state, :usage, usage)
-
-                  # Permanent per-request trace. Lifecycle events (start/stop/message)
-                  # are :info so a broken stream is visible even with debug off;
-                  # high-frequency content_block_delta stays at :debug.
-                  Enum.each(events, fn event ->
-                    if event["type"] == "content_block_delta" do
-                      Logger.debug("[anthropic-stream] rid=#{rid} #{format_stream_event(event)}")
-                    else
-                      Logger.info("[anthropic-stream] rid=#{rid} #{format_stream_event(event)}")
-                    end
-                  end)
-
-                  result =
-                    Enum.reduce_while(events, {:ok, conn}, fn event, {:ok, c} ->
-                      case chunk(c, "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n") do
-                        {:ok, c} -> {:cont, {:ok, c}}
-                        {:error, _} -> {:halt, {:error, c}}
-                      end
-                    end)
-
-                  case result do
-                    {:ok, conn} -> {:cont, {conn, new_state}}
-                    {:error, conn} -> {:halt, {conn, new_state}}
-                  end
-
-                {:skip, new_state} ->
-                  {:cont, {conn, new_state}}
-              end
-          end)
-
-        took = System.monotonic_time(:millisecond) - (final_state[:started_at] || started_at)
-
-        Logger.info(
-          "[anthropic-stream] rid=#{rid} finished model=#{deployment.upstream_model} " <>
-            "deployment=#{deployment.name} blocks=#{final_state[:next_idx] || 0} " <>
-            "usage=#{inspect(Map.get(final_state, :usage))} ms=#{took}"
-        )
-
-        conn
-
-      {:error, %{type: :not_found}} ->
-        send_anthropic_error(conn, 404, "not_found_error", "Model '#{model_name}' not found")
-
-      {:error, err} ->
-        send_anthropic_error(conn, 500, "api_error", inspect(err))
-    end
-  end
-
-  defp send_anthropic_error(conn, status, type, message) do
-    send_json(conn, status, %{
-      "type" => "error",
-      "error" => %{"type" => type, "message" => message}
-    })
+  defp reduce_openai(data, prev_usage) do
+    this_usage = data["usage"] || prev_usage
+    {:ok, ["data: #{Jason.encode!(data)}\n\n"], this_usage}
   end
 
   # ── Tracing helpers ───────────────────────────────────────
@@ -620,38 +293,8 @@ defmodule Llmgateway.Server do
     :crypto.strong_rand_bytes(4) |> Base.hex_encode32(case: :lower, padding: false)
   end
 
-  defp format_stream_event(%{"type" => "message_start"} = ev) do
-    "event=message_start model=#{get_in(ev, ["message", "model"]) || "?"}"
-  end
-
-  defp format_stream_event(%{"type" => "content_block_start"} = ev) do
-    "event=content_block_start index=#{ev["index"]} type=#{get_in(ev, ["content_block", "type"]) || "?"}"
-  end
-
-  defp format_stream_event(%{"type" => "content_block_stop"} = ev) do
-    "event=content_block_stop index=#{ev["index"]}"
-  end
-
-  defp format_stream_event(%{"type" => "message_delta"} = ev) do
-    "event=message_delta stop_reason=#{get_in(ev, ["delta", "stop_reason"]) || "?"} usage=#{inspect(ev["usage"])}"
-  end
-
-  defp format_stream_event(%{"type" => "message_stop"}) do
-    "event=message_stop"
-  end
-
-  defp format_stream_event(%{"type" => "content_block_delta"} = ev) do
-    "event=content_block_delta index=#{ev["index"]} kind=#{get_in(ev, ["delta", "type"]) || "?"}"
-  end
-
-  defp format_stream_event(ev), do: "event=#{ev["type"]}"
-
   defp generate_text(model, body, key_name, app) do
     Llmgateway.generate_text(model, body, key: key_name, app: app)
-  end
-
-  defp stream_text(model, body, key_name, app, rid) do
-    Fallback.stream(model, body, key: key_name, app: app, rid: rid)
   end
 
   # ── Plugs ─────────────────────────────────────────────────
@@ -667,17 +310,17 @@ defmodule Llmgateway.Server do
                   %{conn | body_params: parsed}
 
                 {:error, _} ->
-                  conn |> send_json(400, error_body("Invalid JSON", "invalid_request")) |> halt()
+                  conn |> Responses.send_json(400, Responses.error_body("Invalid JSON", "invalid_request")) |> halt()
               end
 
             {:more, _, conn} ->
               conn
-              |> send_json(413, error_body("Request body too large", "invalid_request"))
+              |> Responses.send_json(413, Responses.error_body("Request body too large", "invalid_request"))
               |> halt()
 
             {:error, _reason} ->
               conn
-              |> send_json(400, error_body("Failed to read body", "invalid_request"))
+              |> Responses.send_json(400, Responses.error_body("Failed to read body", "invalid_request"))
               |> halt()
           end
         else
@@ -701,7 +344,7 @@ defmodule Llmgateway.Server do
             assign(conn, :key_name, nil)
           else
             conn
-            |> send_json(503, error_body("Router not started", "service_unavailable"))
+            |> Responses.send_json(503, Responses.error_body("Router not started", "service_unavailable"))
             |> halt()
           end
 
@@ -712,7 +355,7 @@ defmodule Llmgateway.Server do
 
             {:error, :invalid_key} ->
               conn
-              |> send_json(401, error_body("Invalid API key", "authentication_error"))
+              |> Responses.send_json(401, Responses.error_body("Invalid API key", "authentication_error"))
               |> halt()
           end
       end
@@ -734,142 +377,7 @@ defmodule Llmgateway.Server do
 
   # ── Helpers ─────────────────────────────────────────────
 
-  defp send_json(conn, status, body) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
-  end
-
-  defp empty_list(conn), do: send_json(conn, 200, %{"object" => "list", "data" => []})
-
-  defp not_implemented(conn),
-    do: send_json(conn, 501, error_body("Not implemented", "not_implemented"))
-
-  defp unsupported_native_probe(conn, endpoint) do
-    send_json(
-      conn,
-      404,
-      error_body("Native endpoint '#{endpoint}' is not supported", "not_found")
-    )
-  end
-
-  defp put_context_header(conn, model_name, key_name) do
-    case Llmgateway.Router.resolve_model(model_name, key: key_name) do
-      {:ok, deployment, _} when is_integer(deployment.context) ->
-        conn
-        |> put_resp_header("x-context-length", Integer.to_string(deployment.context))
-        |> put_resp_header("x-model-name", deployment.upstream_model)
-
-      _ ->
-        conn
-    end
-  end
-
-  # ── LiteLLM discovery serialization ─────────────────────
-  #
-  # OMP's LiteLLM provider reads the standard LiteLLM schema from
-  # /model/info: supports_reasoning, supports_vision,
-  # supports_function_calling, supported_openai_params, and
-  # max_input_tokens / max_output_tokens. Derive those from the
-  # canonical LLMDB capabilities so aliases present identically to
-  # their backing models.
-
-  defp serialize_litellm_model_info(m) do
-    limits = m.limits || %{}
-    context = limits[:context]
-    output = limits[:output]
-    reasoning = reasoning_enabled?(m.capabilities)
-    supported_params = supported_openai_params(m)
-
-    model_info =
-      %{
-        "id" => m.id,
-        "max_input_tokens" => context,
-        "max_output_tokens" => output,
-        "max_tokens" => output,
-        "supports_reasoning" => reasoning,
-        "supports_vision" => vision_supported?(m.modalities),
-        "supports_function_calling" => function_calling_supported?(m.capabilities)
-      }
-      |> maybe_put("supported_openai_params", supported_params)
-
-    %{
-      "model_name" => m.id,
-      "model_info" => model_info
-    }
-  end
-
-  defp reasoning_enabled?(%{reasoning: %{enabled: true}}), do: true
-  defp reasoning_enabled?(_), do: false
-
-  defp vision_supported?(%{input: input}) when is_list(input), do: :image in input
-  defp vision_supported?(_), do: false
-
-  defp function_calling_supported?(%{tools: %{enabled: true}}), do: true
-  defp function_calling_supported?(_), do: false
-
-  defp supported_openai_params(m) do
-    params =
-      []
-      |> then(
-        &if function_calling_supported?(m.capabilities),
-          do: ["tools", "tool_choice" | &1],
-          else: &1
-      )
-      |> then(&if reasoning_enabled?(m.capabilities), do: ["reasoning_effort" | &1], else: &1)
-
-    case params do
-      [] -> nil
-      _ -> Enum.reverse(params)
-    end
-  end
-
-  defp serialize_model(m) do
-    limits = m.limits || %{}
-
-    %{
-      "id" => m.id,
-      "object" => "model",
-      "created" => 0,
-      "owned_by" => m.owned_by,
-      "limits" => limits,
-      "context_window" => limits[:context],
-      "max_tokens" => limits[:output],
-      "capabilities" => m.capabilities,
-      "modalities" => m.modalities,
-      "execution" => m.execution,
-      "extra" => m.extra,
-      "reasoning" => reasoning_enabled?(m.capabilities)
-    }
-    |> maybe_put("thinking", thinking_projection(m.extra))
-  end
-
-  defp thinking_projection(extra) when is_map(extra) do
-    extra
-    |> Map.get("reasoning_options", [])
-    |> Enum.find_value(fn
-      %{"type" => "effort", "values" => values} when is_list(values) ->
-        %{mode: "effort", efforts: values -- ["none"]}
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp thinking_projection(_), do: nil
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  defp error_body(message, type, details \\ nil) do
-    error = %{"message" => message, "type" => type}
-    error = if details, do: Map.put(error, "details", details), else: error
-    %{"error" => error}
-  end
-
-  defp format_error(%{message: msg}), do: msg
-  defp format_error(err) when is_binary(err), do: err
-  defp format_error(err), do: inspect(err)
+  defp format_error(err), do: Responses.format_error(err)
 
   defp moderation_benign, do: %{"flagged" => false, "categories" => %{}, "category_scores" => %{}}
 end
