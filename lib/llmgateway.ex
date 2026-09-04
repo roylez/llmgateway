@@ -12,12 +12,12 @@ defmodule Llmgateway do
       {:ok, _} = Llmgateway.Router.start_link(config)
 
       # Generate text
-      {:ok, response} = Llmgateway.generate_text("deepseek-v4-flash", %{
+      {:ok, response, _deployment} = Llmgateway.generate_text("deepseek-v4-flash", %{
         "messages" => [%{"role" => "user", "content" => "Hello!"}]
       })
 
       # With key-based access
-      {:ok, response} = Llmgateway.generate_text("gpt-4o-mini", %{
+      {:ok, response, _deployment} = Llmgateway.generate_text("gpt-4o-mini", %{
         "messages" => [%{"role" => "user", "content" => "Hello!"}]
       }, key: "work-key")
   """

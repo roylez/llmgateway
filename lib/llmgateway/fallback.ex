@@ -13,7 +13,7 @@ defmodule Llmgateway.Fallback do
   @doc """
   Call the primary deployment, falling back through the chain on retryable errors.
 
-  Returns `{:ok, response}` or `{:error, reason}`.
+  Returns `{:ok, response, deployment}` or `{:error, reason}`.
   """
   def call_with_fallback(deployments, fallback_names, body, opts \\ [])
 
@@ -182,23 +182,25 @@ defmodule Llmgateway.Fallback do
     executor.call(deployment, body, Keyword.drop(opts, [:executor, :seen]))
   end
 
-  defp success(response, _deployment, original, errors, {:call, _}) do
+  defp success(response, deployment, original, errors, {:call, _}) do
     depth = length(errors)
 
-    {:ok,
-     Map.update(
-       response,
-       "_llmgateway",
-       %{
-         "fallback_from" => original,
-         "fallback_depth" => depth
-       },
-       fn metadata ->
-         metadata
-         |> Map.put("fallback_from", original)
-         |> Map.put("fallback_depth", depth)
-       end
-     )}
+    response =
+      Map.update(
+        response,
+        "_llmgateway",
+        %{
+          "fallback_from" => original,
+          "fallback_depth" => depth
+        },
+        fn metadata ->
+          metadata
+          |> Map.put("fallback_from", original)
+          |> Map.put("fallback_depth", depth)
+        end
+      )
+
+    {:ok, response, deployment}
   end
 
   defp success(stream, deployment, _original, _errors, {:stream, _}),

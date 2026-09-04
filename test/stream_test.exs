@@ -1,7 +1,12 @@
+defmodule Llmgateway.StreamTest.ClosedAdapter do
+  def chunk(_payload, _body), do: {:error, :closed}
+end
+
 defmodule Llmgateway.StreamTest do
   use ExUnit.Case, async: true
 
   alias Llmgateway.Stream, as: LlmStream
+  alias Llmgateway.{Deployment, SSE, StreamTest.ClosedAdapter}
 
   describe "parse_sse_lines/1" do
     test "parses data lines from SSE chunk" do
@@ -356,6 +361,24 @@ defmodule Llmgateway.StreamTest do
       [first | _] = tool_calls
       assert first["id"] == "fc_1"
       assert first["function"]["name"] == "get_weather"
+    end
+  end
+
+  describe "SSE connection failures" do
+    test "keeps the connection after the client closes" do
+      conn = %Plug.Conn{adapter: {ClosedAdapter, :closed}, state: :chunked}
+      deployment = %Deployment{name: "test", provider_name: "test", upstream_model: "test"}
+
+      assert {^conn, nil} =
+               SSE.stream_loop(
+                 [%{"choices" => []}],
+                 conn,
+                 nil,
+                 deployment,
+                 "request-1",
+                 fn _, state -> {:ok, ["data: chunk\n\n"], state} end,
+                 & &1
+               )
     end
   end
 end

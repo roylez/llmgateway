@@ -30,7 +30,7 @@ defmodule Llmgateway.FallbackTest do
     assert {:ok, deployments, fallbacks} =
              Router.resolve_deployments("deepseek-v4-flash", key: "personal-key")
 
-    assert {:ok, response} =
+    assert {:ok, response, deployment} =
              Fallback.call_with_fallback(deployments, fallbacks, body,
                executor: Llmgateway.FallbackTest.Executor
              )
@@ -39,6 +39,7 @@ defmodule Llmgateway.FallbackTest do
     assert_receive {:call, {"openai-main", "gpt-4o-mini"}, ^body, _}
     assert response["_llmgateway"]["fallback_from"] == "deepseek-v4-flash"
     assert response["_llmgateway"]["fallback_depth"] == 1
+    assert deployment.name == "deepseek-v4-flash"
   end
 
   test "stops after a non-retryable candidate error" do
@@ -71,7 +72,7 @@ defmodule Llmgateway.FallbackTest do
 
     assert Enum.all?(deployments, &(&1.name == "fast"))
 
-    assert {:ok, _response} =
+    assert {:ok, _response, _deployment} =
              Fallback.call_with_fallback(deployments, fallbacks, body,
                executor: Llmgateway.FallbackTest.Executor
              )

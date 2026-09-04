@@ -45,7 +45,7 @@ defmodule Llmgateway.SSE do
   defp write_frames(conn, [frame | rest]) do
     case chunk(conn, frame) do
       {:ok, conn} -> write_frames(conn, rest)
-      {:error, _} = err -> err
+      {:error, _} -> {:error, conn}
     end
   end
 end
