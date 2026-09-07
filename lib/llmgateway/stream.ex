@@ -21,8 +21,10 @@ defmodule Llmgateway.Stream do
   def call(%Deployment{} = deployment, body, opts \\ []) do
     case Upstream.execute(deployment, body, Keyword.put(opts, :stream, true)) do
       {:ok, %Req.Response{body: resp_body}, _warnings, is_responses} ->
-        stream = Llmgateway.Stream.build_stream(resp_body, deployment, is_responses, opts[:rid])
-        {:ok, stream}
+        resp_body
+        |> Llmgateway.Stream.build_stream(deployment, is_responses, opts[:rid])
+        |> preflight()
+        |> log_empty_stream(deployment, opts[:rid])
 
       {:error, error} ->
         {:error, error}
@@ -53,6 +55,79 @@ defmodule Llmgateway.Stream do
       &finish_stats/1,
       fn _stats -> :ok end
     )
+  end
+
+  @doc false
+  def preflight(stream) do
+    case Enumerable.reduce(stream, {:cont, []}, fn item, buffered ->
+           buffered = [item | buffered]
+
+           if usable?(item) do
+             {:suspend, buffered}
+           else
+             {:cont, buffered}
+           end
+         end) do
+      {:suspended, buffered, continuation} ->
+        {:ok, resume_stream(Enum.reverse(buffered), continuation)}
+
+      {status, buffered} when status in [:done, :halted] ->
+        {:error,
+         %{
+           type: :server_error,
+           status: 502,
+           message: "Upstream stream completed without text or tool calls",
+           stream_stats: stream_stats(buffered)
+         }}
+    end
+  end
+
+  defp usable?(%{"choices" => [choice | _]}) do
+    delta = choice["delta"] || %{}
+
+    (is_binary(delta["content"]) and delta["content"] != "") or
+      thinking_text(delta) or
+      (is_list(delta["tool_calls"]) and delta["tool_calls"] != [])
+  end
+
+  defp usable?(_), do: false
+
+  defp resume_stream(buffered, continuation) do
+    Stream.resource(
+      fn -> {buffered, continuation} end,
+      fn
+        {[item | rest], continuation} ->
+          {[item], {rest, continuation}}
+
+        {[], nil} ->
+          {:halt, {[], nil}}
+
+        {[], continuation} ->
+          case continuation.({:cont, []}) do
+            {:suspended, items, next} -> {Enum.reverse(items), {[], next}}
+            {:done, items} -> {Enum.reverse(items), {[], nil}}
+          end
+      end,
+      fn
+        {_, nil} -> :ok
+        {_, continuation} -> continuation.({:halt, []})
+      end
+    )
+  end
+
+  defp log_empty_stream({:error, %{stream_stats: stats} = error}, deployment, rid) do
+    log_stats(deployment, rid, stats, nil)
+    {:error, error}
+  end
+
+  defp log_empty_stream(result, _deployment, _rid), do: result
+
+  defp stream_stats(buffered) do
+    buffered
+    |> Enum.find_value(fn
+      {:stream_stats, stats} -> stats
+      _ -> nil
+    end)
   end
 
   @doc false
@@ -251,16 +326,10 @@ defmodule Llmgateway.Stream do
     stayed in `reasoning_content` and never reached `content`. Harnesses that
     request reasoning (Codex, opencode) render this fine, so it is only
     notable, but harnesses that do not (Claude Code) show an empty reply.
-
   Converted reasoning (`thinking_deltas == 0`) is ordinary text to the client
   and logs at `:debug` like any other content.
   """
   def log_stats(%Deployment{} = deployment, rid, stats, usage) do
-    # Usable = text or tool calls. Reasoning the client can see (text_deltas
-    # after conversion) is content; reasoning that stayed raw
-    # (thinking_deltas with no text) leaves reasoning-capable clients a full
-    # reply but shows nothing to harnesses that drop thinking — notable, not
-    # an error. A true empty stop has no deltas of any kind.
     empty_stop? =
       stats.text_deltas == 0 and stats.tool_deltas == 0 and stats.thinking_deltas == 0
 

@@ -250,7 +250,7 @@ defmodule Llmgateway.StreamTest do
       assert stats.text_deltas == 1
     end
 
-    test "log_stats warns on empty stops and raw-thinking-only streams, not on text" do
+    test "log_stats warns on malformed and contentless streams, not visible text" do
       import ExUnit.CaptureLog
 
       base = %{
@@ -267,12 +267,17 @@ defmodule Llmgateway.StreamTest do
         tail: "{}"
       }
 
-      # True empty stop: no deltas of any kind — upstream returned nothing.
       empty = capture_log(fn -> LlmStream.log_stats(deployment(), "rid9", base, nil) end)
       assert empty =~ "warning"
-      assert empty =~ "[stream-stats]"
+      assert empty =~ "upstream raw tail"
 
-      # Reasoning-only turn that leaked raw thinking: Claude Code sees nothing.
+      malformed =
+        capture_log(fn ->
+          LlmStream.log_stats(deployment(), "rid9", %{base | decode_failures: 1}, nil)
+        end)
+
+      assert malformed =~ "warning"
+
       leaked =
         capture_log(fn ->
           LlmStream.log_stats(deployment(), "rid9", %{base | thinking_deltas: 2}, nil)
@@ -280,7 +285,6 @@ defmodule Llmgateway.StreamTest do
 
       assert leaked =~ "warning"
 
-      # Reasoning converted to visible text is content: quiet debug line.
       converted =
         capture_log(fn ->
           LlmStream.log_stats(
@@ -361,6 +365,37 @@ defmodule Llmgateway.StreamTest do
       [first | _] = tool_calls
       assert first["id"] == "fc_1"
       assert first["function"]["name"] == "get_weather"
+    end
+  end
+
+  describe "stream preflight" do
+    test "preserves the buffered prefix and remainder after content arrives" do
+      stream = [
+        %{"choices" => [%{"delta" => %{"role" => "assistant"}}]},
+        %{"choices" => [%{"delta" => %{"content" => "ready"}}]},
+        %{"choices" => [%{"delta" => %{}, "finish_reason" => "stop"}]}
+      ]
+
+      assert {:ok, preflighted} = LlmStream.preflight(stream)
+      assert Enum.to_list(preflighted) == stream
+    end
+
+    test "rejects a completed stream with no visible content" do
+      stream = [
+        %{"choices" => [%{"delta" => %{}, "finish_reason" => "stop"}]},
+        :done,
+        {:stream_stats,
+         %{
+           text_deltas: 0,
+           thinking_deltas: 0,
+           tool_deltas: 0,
+           finish: "stop",
+           done: true
+         }}
+      ]
+
+      assert {:error, %{type: :server_error, stream_stats: stats}} = LlmStream.preflight(stream)
+      assert stats.finish == "stop"
     end
   end
 

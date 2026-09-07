@@ -5,37 +5,59 @@ defmodule Llmgateway.RequestPreparationTest.CapturePlug do
 
   def call(conn, opts) do
     {:ok, body, conn} = read_body(conn)
+    request_body = Jason.decode!(body)
 
     headers =
       for {name, value} <- conn.req_headers, into: %{} do
         {name, value}
       end
 
-    send(opts[:owner], {:captured_request, conn.request_path, headers, Jason.decode!(body)})
+    send(opts[:owner], {:captured_request, conn.request_path, headers, request_body})
 
-    response =
-      if conn.request_path == "/responses" do
-        Jason.encode!(%{
-          "id" => "response-1",
-          "model" => "test-model",
-          "status" => "completed",
-          "output" => [
-            %{"type" => "message", "content" => [%{"type" => "output_text", "text" => "ok"}]}
-          ],
-          "usage" => %{}
-        })
+    {content_type, response} =
+      if request_body["stream"] do
+        response =
+          cond do
+            request_body["empty_stream"] ->
+              ~s(data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n)
+
+            conn.request_path == "/responses" ->
+              ~s(data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\ndata: [DONE]\n\n)
+
+            true ->
+              ~s(data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"ok"}}]}\n\ndata: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n)
+          end
+
+        {"text/event-stream", response}
       else
-        Jason.encode!(%{
-          "id" => "chatcmpl-1",
-          "object" => "chat.completion",
-          "model" => "test-model",
-          "choices" => [%{"index" => 0, "message" => %{"role" => "assistant", "content" => "ok"}}],
-          "usage" => %{}
-        })
+        response =
+          if conn.request_path == "/responses" do
+            Jason.encode!(%{
+              "id" => "response-1",
+              "model" => "test-model",
+              "status" => "completed",
+              "output" => [
+                %{"type" => "message", "content" => [%{"type" => "output_text", "text" => "ok"}]}
+              ],
+              "usage" => %{}
+            })
+          else
+            Jason.encode!(%{
+              "id" => "chatcmpl-1",
+              "object" => "chat.completion",
+              "model" => "test-model",
+              "choices" => [
+                %{"index" => 0, "message" => %{"role" => "assistant", "content" => "ok"}}
+              ],
+              "usage" => %{}
+            })
+          end
+
+        {"application/json", response}
       end
 
     conn
-    |> put_resp_content_type("application/json")
+    |> put_resp_content_type(content_type)
     |> send_resp(200, response)
   end
 end
@@ -166,6 +188,16 @@ defmodule Llmgateway.RequestPreparationTest do
                ]
              }
            ]
+  end
+
+  test "Stream.call rejects an upstream stream with no usable output", %{base_url: base_url} do
+    assert {:error, %{type: :server_error, message: message}} =
+             Stream.call(deployment(base_url, "/chat/completions"), %{
+               "messages" => [%{"role" => "user", "content" => "Hello"}],
+               "empty_stream" => true
+             })
+
+    assert message == "Upstream stream completed without text or tool calls"
   end
 
   test "Stream.call injects OpenRouter preferred_max_latency into chat completions", %{
