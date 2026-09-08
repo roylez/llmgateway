@@ -199,6 +199,14 @@ defmodule Llmgateway.ServerTest do
       assert conn.status == 404
     end
 
+    test "handles a completion request without a JSON content type" do
+      conn =
+        conn(:post, "/v1/chat/completions", Jason.encode!(%{"model" => "nonexistent"}))
+        |> Server.call(Server.init([]))
+
+      assert conn.status == 404
+    end
+
     test "returns 403 after a forbidden fallback cycle" do
       conn =
         call(

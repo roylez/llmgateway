@@ -336,11 +336,11 @@ defmodule Llmgateway.Server do
               |> halt()
           end
         else
-          conn
+          %{conn | body_params: %{}}
         end
 
       _ ->
-        conn
+        %{conn | body_params: %{}}
     end
   end
 
