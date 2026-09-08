@@ -380,6 +380,22 @@ defmodule Llmgateway.StreamTest do
       assert Enum.to_list(preflighted) == stream
     end
 
+    test "preserves a completed transformed stream after content arrives" do
+      body = """
+      data: {"id":"x","choices":[{"index":0,"delta":{"content":"ready"}}]}
+
+      data: {"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+      data: [DONE]
+
+      """
+
+      stream = LlmStream.build_stream(body, deployment(), false, "rid-preflight")
+
+      assert {:ok, preflighted} = LlmStream.preflight(stream)
+      assert Enum.to_list(preflighted) == Enum.to_list(stream)
+    end
+
     test "rejects a completed stream with no visible content" do
       stream = [
         %{"choices" => [%{"delta" => %{}, "finish_reason" => "stop"}]},

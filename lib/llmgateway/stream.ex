@@ -105,7 +105,7 @@ defmodule Llmgateway.Stream do
         {[], continuation} ->
           case continuation.({:cont, []}) do
             {:suspended, items, next} -> {Enum.reverse(items), {[], next}}
-            {:done, items} -> {Enum.reverse(items), {[], nil}}
+            {status, items} when status in [:done, :halted] -> {Enum.reverse(items), {[], nil}}
           end
       end,
       fn
