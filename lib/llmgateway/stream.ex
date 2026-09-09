@@ -23,7 +23,7 @@ defmodule Llmgateway.Stream do
       {:ok, %Req.Response{body: resp_body}, _warnings, is_responses} ->
         resp_body
         |> Llmgateway.Stream.build_stream(deployment, is_responses, opts[:rid])
-        |> preflight()
+        |> preflight(deployment, opts[:rid])
         |> log_empty_stream(deployment, opts[:rid])
 
       {:error, error} ->
@@ -58,27 +58,33 @@ defmodule Llmgateway.Stream do
   end
 
   @doc false
-  def preflight(stream) do
-    case Enumerable.reduce(stream, {:cont, []}, fn item, buffered ->
-           buffered = [item | buffered]
+  def preflight(stream, deployment \\ nil, rid \\ nil) do
+    try do
+      case Enumerable.reduce(stream, {:cont, []}, fn item, buffered ->
+             buffered = [item | buffered]
 
-           if usable?(item) do
-             {:suspend, buffered}
-           else
-             {:cont, buffered}
-           end
-         end) do
-      {:suspended, buffered, continuation} ->
-        {:ok, resume_stream(Enum.reverse(buffered), continuation)}
+             if usable?(item) do
+               {:suspend, buffered}
+             else
+               {:cont, buffered}
+             end
+           end) do
+        {:suspended, buffered, continuation} ->
+          {:ok, resume_stream(Enum.reverse(buffered), continuation, deployment, rid)}
 
-      {status, buffered} when status in [:done, :halted] ->
-        {:error,
-         %{
-           type: :server_error,
-           status: 502,
-           message: "Upstream stream completed without text or tool calls",
-           stream_stats: stream_stats(buffered)
-         }}
+        {status, buffered} when status in [:done, :halted] ->
+          {:error,
+           %{
+             type: :server_error,
+             status: 502,
+             message: "Upstream stream completed without text or tool calls",
+             stream_stats: stream_stats(buffered)
+           }}
+      end
+    rescue
+      error in Finch.TransportError ->
+        log_transport_error(deployment, rid, error.reason)
+        {:error, transport_error(error)}
     end
   end
 
@@ -92,7 +98,7 @@ defmodule Llmgateway.Stream do
 
   defp usable?(_), do: false
 
-  defp resume_stream(buffered, continuation) do
+  defp resume_stream(buffered, continuation, deployment, rid) do
     Stream.resource(
       fn -> {buffered, continuation} end,
       fn
@@ -103,15 +109,33 @@ defmodule Llmgateway.Stream do
           {:halt, {[], nil}}
 
         {[], continuation} ->
-          case continuation.({:cont, []}) do
-            {:suspended, items, next} -> {Enum.reverse(items), {[], next}}
-            {status, items} when status in [:done, :halted] -> {Enum.reverse(items), {[], nil}}
+          try do
+            case continuation.({:cont, []}) do
+              {:suspended, items, next} -> {Enum.reverse(items), {[], next}}
+              {status, items} when status in [:done, :halted] -> {Enum.reverse(items), {[], nil}}
+            end
+          rescue
+            error in Finch.TransportError ->
+              log_transport_error(deployment, rid, error.reason)
+              {:halt, {[], continuation}}
           end
       end,
       fn
         {_, nil} -> :ok
         {_, continuation} -> continuation.({:halt, []})
       end
+    )
+  end
+
+  defp transport_error(error), do: %{type: :transport_error, reason: error.reason}
+
+  defp log_transport_error(nil, _rid, reason) do
+    Logger.warning("[stream] upstream transport error #{inspect(reason)}")
+  end
+
+  defp log_transport_error(deployment, rid, reason) do
+    Logger.warning(
+      "[stream] rid=#{rid || "-"} deployment=#{deployment.name} transport error #{inspect(reason)}"
     )
   end
 

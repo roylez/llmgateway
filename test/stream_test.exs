@@ -413,6 +413,35 @@ defmodule Llmgateway.StreamTest do
       assert {:error, %{type: :server_error, stream_stats: stats}} = LlmStream.preflight(stream)
       assert stats.finish == "stop"
     end
+
+    test "returns a retryable error when the upstream times out before content" do
+      stream =
+        Stream.resource(
+          fn -> :timeout end,
+          fn :timeout -> raise %Finch.TransportError{reason: :timeout} end,
+          fn _ -> :ok end
+        )
+
+      assert {:error, %{type: :transport_error, reason: :timeout}} = LlmStream.preflight(stream)
+    end
+
+    test "stops cleanly when the upstream times out after content" do
+      stream =
+        Stream.resource(
+          fn -> :content end,
+          fn
+            :content -> {[%{"choices" => [%{"delta" => %{"content" => "ready"}}]}], :timeout}
+            :timeout -> raise %Finch.TransportError{reason: :timeout}
+          end,
+          fn _ -> :ok end
+        )
+
+      assert {:ok, preflighted} = LlmStream.preflight(stream)
+
+      assert Enum.to_list(preflighted) == [
+               %{"choices" => [%{"delta" => %{"content" => "ready"}}]}
+             ]
+    end
   end
 
   describe "SSE connection failures" do
