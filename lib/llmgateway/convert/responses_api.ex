@@ -54,7 +54,7 @@ defmodule Llmgateway.Convert.ResponsesAPI do
   def from_responses(body) when is_map(body) do
     output_items = body["output"] || []
     {text, tool_calls} = extract_output(output_items)
-    finish_reason = convert_status(body["status"])
+    finish_reason = if tool_calls, do: "tool_calls", else: convert_status(body["status"])
 
     message =
       %{"role" => "assistant"}

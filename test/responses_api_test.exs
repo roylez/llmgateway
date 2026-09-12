@@ -524,7 +524,7 @@ defmodule Llmgateway.Convert.ResponsesAPITest do
       result = ResponsesAPI.from_responses(body)
 
       choice = hd(result["choices"])
-      assert choice["finish_reason"] == "stop"
+      assert choice["finish_reason"] == "tool_calls"
       assert choice["message"]["content"] == nil
 
       [tc] = choice["message"]["tool_calls"]
