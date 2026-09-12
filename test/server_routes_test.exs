@@ -42,6 +42,14 @@ defmodule Llmgateway.ServerRoutesTest do
     assert json(conn)["error"]["type"] == "not_implemented"
   end
 
+  # POST /v1/responses is now implemented: it must not return the stub 501.
+  # It will attempt an upstream call with the fake fixture keys and fail, but
+  # never with the not_implemented envelope.
+  defp refute_501(method, path, body \\ %{"model" => "test", "input" => "test"}) do
+    conn = call(method, path, body)
+    refute conn.status == 501
+  end
+
   defp assert_empty_list(method, path) do
     conn = call(method, path)
     assert conn.status == 200
@@ -238,7 +246,10 @@ defmodule Llmgateway.ServerRoutesTest do
 
   describe "responses" do
     test "GET /v1/responses returns empty list", do: assert_empty_list(:get, "/v1/responses")
-    test "POST /v1/responses returns 501", do: assert_501(:post, "/v1/responses")
+
+    test "POST /v1/responses is implemented (no longer 501)",
+      do: refute_501(:post, "/v1/responses")
+
     test "GET /v1/responses/:id returns 404", do: assert_404(:get, "/v1/responses/resp-abc")
 
     test "POST /v1/responses/:id/cancel returns 404",

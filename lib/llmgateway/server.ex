@@ -6,6 +6,7 @@ defmodule Llmgateway.Server do
   - `POST /v1/chat/completions` — chat completion (with optional streaming)
   - `POST /v1/messages` — Anthropic-format chat completion
   - `POST /v1/completions` — legacy text completions (proxied to chat)
+  - `POST /v1/responses` — OpenAI Responses API (adapted to chat/completions)
   - `POST /v1/moderations` — content moderation (always benign)
   - `POST /v1/messages/count_tokens` — token count estimate
   - `GET /v1/models` — list available models
@@ -19,7 +20,7 @@ defmodule Llmgateway.Server do
 
   Stub endpoints (501 for POST, empty list for GET, 404 for GET by ID):
   - embeddings, audio, images, rerank, files, batches,
-    fine_tuning/jobs, assistants, threads, responses
+    fine_tuning/jobs, assistants, threads, responses (GET/compact only)
 
   Unsupported native APIs return the standard 404 JSON error envelope:
   - Ollama (`/api/tags`, `/api/show`)
@@ -52,7 +53,11 @@ defmodule Llmgateway.Server do
     if Llmgateway.Runtime.ready?() do
       Responses.send_json(conn, 200, %{"status" => "ready"})
     else
-      Responses.send_json(conn, 503, Responses.error_body("Gateway not ready", "service_unavailable"))
+      Responses.send_json(
+        conn,
+        503,
+        Responses.error_body("Gateway not ready", "service_unavailable")
+      )
     end
   end
 
@@ -78,13 +83,25 @@ defmodule Llmgateway.Server do
   get "/models/:model_id" do
     case Llmgateway.Router.resolve_model(model_id, key: conn.assigns[:key_name]) do
       {:ok, deployment, _fallbacks} ->
-        Responses.send_json(conn, 200, Serializer.serialize_model(Llmgateway.Router.discovery_metadata(deployment)))
+        Responses.send_json(
+          conn,
+          200,
+          Serializer.serialize_model(Llmgateway.Router.discovery_metadata(deployment))
+        )
 
       {:error, :not_found} ->
-        Responses.send_json(conn, 404, Responses.error_body("Model '#{model_id}' not found", "not_found"))
+        Responses.send_json(
+          conn,
+          404,
+          Responses.error_body("Model '#{model_id}' not found", "not_found")
+        )
 
       {:error, :forbidden} ->
-        Responses.send_json(conn, 403, Responses.error_body("Access denied to '#{model_id}'", "access_forbidden"))
+        Responses.send_json(
+          conn,
+          403,
+          Responses.error_body("Access denied to '#{model_id}'", "access_forbidden")
+        )
     end
   end
 
@@ -185,16 +202,39 @@ defmodule Llmgateway.Server do
         })
 
       {:error, :not_found} ->
-        Responses.send_json(conn, 404, Responses.error_body("Model '#{model_name}' not found", "not_found"))
+        Responses.send_json(
+          conn,
+          404,
+          Responses.error_body("Model '#{model_name}' not found", "not_found")
+        )
 
       {:error, _} ->
-        Responses.send_json(conn, 403, Responses.error_body("Access denied to '#{model_name}'", "access_forbidden"))
+        Responses.send_json(
+          conn,
+          403,
+          Responses.error_body("Access denied to '#{model_name}'", "access_forbidden")
+        )
+    end
+  end
+
+  # ── Responses API (OpenAI) ─────────────────────────────────────────
+
+  post "/responses" do
+    body = conn.body_params
+    key_name = conn.assigns[:key_name]
+    app = ClientIdentity.app(conn)
+    canonical = Llmgateway.Convert.InboundResponses.to_canonical(body)
+
+    if canonical["stream"] do
+      handle_responses_stream(conn, canonical["model"], canonical, key_name, app)
+    else
+      handle_responses_completion(conn, canonical["model"], canonical, key_name, app)
     end
   end
 
   # ── Compatibility stubs (embeddings/files/assistants/etc) ─
 
-  forward "/", to: Llmgateway.StubRoutes
+  forward("/", to: Llmgateway.StubRoutes)
 
   # ── Private: completion routing ────────────────────────────
 
@@ -215,33 +255,66 @@ defmodule Llmgateway.Server do
         |> Responses.put_context_header(deployment)
         |> Responses.send_json(200, response)
 
-      {:error, %{type: :not_found}} ->
-        Responses.send_json(conn, 404, Responses.error_body("Model '#{model_name}' not found", "not_found"))
+      {:error, err} ->
+        completion_error(conn, model_name, err)
+    end
+  end
 
-      {:error, %{type: :forbidden}} ->
-        Responses.send_json(conn, 403, Responses.error_body("Access denied to '#{model_name}'", "access_forbidden"))
+  # Shared error envelope for all chat-shaped completion endpoints
+  # (chat/completions, completions, messages non-stream, responses non-stream).
+  defp completion_error(conn, model_name, err) do
+    case err do
+      %{type: :not_found} ->
+        Responses.send_json(
+          conn,
+          404,
+          Responses.error_body("Model '#{model_name}' not found", "not_found")
+        )
 
-      {:error, %{type: :rate_limit} = err} ->
-        Responses.send_json(conn, 429, Responses.error_body(err[:message] || "Rate limited", "rate_limit_error"))
+      %{type: :forbidden} ->
+        Responses.send_json(
+          conn,
+          403,
+          Responses.error_body("Access denied to '#{model_name}'", "access_forbidden")
+        )
 
-      {:error, %{type: :server_error} = err} ->
-        Responses.send_json(conn, 502, Responses.error_body(err[:message] || "Upstream error", "upstream_error"))
+      %{type: :rate_limit} = err ->
+        Responses.send_json(
+          conn,
+          429,
+          Responses.error_body(err[:message] || "Rate limited", "rate_limit_error")
+        )
 
-      {:error, %{type: :all_failed, errors: errors}} ->
+      %{type: :server_error} = err ->
+        Responses.send_json(
+          conn,
+          502,
+          Responses.error_body(err[:message] || "Upstream error", "upstream_error")
+        )
+
+      %{type: :all_failed, errors: errors} ->
         details =
           Enum.map(errors, fn {name, e} ->
             %{"model" => name, "status" => e[:status], "reason" => e[:message] || inspect(e)}
           end)
 
-        Responses.send_json(conn, 502, Responses.error_body("All providers failed", "upstream_error", details))
+        Responses.send_json(
+          conn,
+          502,
+          Responses.error_body("All providers failed", "upstream_error", details)
+        )
 
-      {:error, %{type: :transport_error, reason: reason}} ->
-        Responses.send_json(conn, 502, Responses.error_body("Transport error: #{inspect(reason)}", "upstream_error"))
+      %{type: :transport_error, reason: reason} ->
+        Responses.send_json(
+          conn,
+          502,
+          Responses.error_body("Transport error: #{inspect(reason)}", "upstream_error")
+        )
 
-      {:error, %{message: msg}} ->
+      %{message: msg} ->
         Responses.send_json(conn, 502, Responses.error_body(msg, "upstream_error"))
 
-      {:error, err} ->
+      err ->
         Responses.send_json(conn, 500, Responses.error_body(format_error(err), "internal_error"))
     end
   end
@@ -275,10 +348,18 @@ defmodule Llmgateway.Server do
         end
 
       {:error, %{type: :not_found}} ->
-        Responses.send_json(conn, 404, Responses.error_body("Model '#{model_name}' not found", "not_found"))
+        Responses.send_json(
+          conn,
+          404,
+          Responses.error_body("Model '#{model_name}' not found", "not_found")
+        )
 
       {:error, %{type: :forbidden}} ->
-        Responses.send_json(conn, 403, Responses.error_body("Access denied to '#{model_name}'", "access_forbidden"))
+        Responses.send_json(
+          conn,
+          403,
+          Responses.error_body("Access denied to '#{model_name}'", "access_forbidden")
+        )
 
       {:error, %{type: :all_failed, errors: errors}} ->
         details =
@@ -286,11 +367,101 @@ defmodule Llmgateway.Server do
             %{"model" => name, "status" => e[:status], "reason" => e[:message] || inspect(e)}
           end)
 
-        Responses.send_json(conn, 502, Responses.error_body("All providers failed", "upstream_error", details))
+        Responses.send_json(
+          conn,
+          502,
+          Responses.error_body("All providers failed", "upstream_error", details)
+        )
 
       {:error, err} ->
         Responses.send_json(conn, 502, Responses.error_body(inspect(err), "upstream_error"))
     end
+  end
+
+  # ── Responses API handlers ─────────────────────────────────────────
+
+  # Non-streaming: run the canonical chat path, then re-encode the OpenAI
+  # response as a Responses API payload.
+  defp handle_responses_completion(conn, model_name, body, key_name, app) do
+    case generate_text(model_name, body, key_name, app) do
+      {:ok, response, deployment} ->
+        conn
+        |> Responses.put_context_header(deployment)
+        |> Responses.send_json(200, Llmgateway.Convert.InboundResponses.from_canonical(response))
+
+      {:error, err} ->
+        completion_error(conn, model_name, err)
+    end
+  end
+
+  # Streaming: run the canonical chat stream, re-encode each chunk as a
+  # Responses API SSE event. Responses API streams use typed events; we emit
+  # the minimal sequence a client needs: response.created, output_text deltas,
+  # and response.completed.
+  defp handle_responses_stream(conn, model_name, body, key_name, app) do
+    rid = new_rid()
+
+    case Fallback.stream(model_name, body, key: key_name, app: app, rid: rid) do
+      {:ok, stream, deployment} ->
+        tel = Telemetry.request_start(deployment, app: app)
+
+        conn =
+          conn
+          |> put_resp_content_type("text/event-stream")
+          |> put_resp_header("cache-control", "no-cache")
+          |> put_resp_header("connection", "keep-alive")
+          |> put_resp_header("x-context-length", to_string(deployment.context || 0))
+          |> put_resp_header("x-model-name", deployment.upstream_model)
+          |> send_chunked(200)
+
+        state = %{resp_id: "resp_#{rid}", model: model_name}
+        reducer = fn chunk, acc -> responses_stream_reduce(chunk, acc) end
+
+        {conn, _state} = SSE.stream_loop(stream, conn, state, deployment, rid, reducer, & &1)
+
+        Telemetry.request_stop(tel, 200, nil)
+        conn
+
+      {:error, %{type: :not_found}} ->
+        Responses.send_json(
+          conn,
+          404,
+          Responses.error_body("Model '#{model_name}' not found", "not_found")
+        )
+
+      {:error, %{type: :forbidden}} ->
+        Responses.send_json(
+          conn,
+          403,
+          Responses.error_body("Access denied to '#{model_name}'", "access_forbidden")
+        )
+
+      {:error, %{type: :all_failed, errors: errors}} ->
+        details =
+          Enum.map(errors, fn {name, e} ->
+            %{"model" => name, "status" => e[:status], "reason" => e[:message] || inspect(e)}
+          end)
+
+        Responses.send_json(
+          conn,
+          502,
+          Responses.error_body("All providers failed", "upstream_error", details)
+        )
+
+      {:error, err} ->
+        Responses.send_json(conn, 502, Responses.error_body(inspect(err), "upstream_error"))
+    end
+  end
+
+  # Map each canonical chat.completion.chunk to Responses API SSE events.
+  defp responses_stream_reduce(chunk, state) do
+    {events, new_state} =
+      Llmgateway.Convert.InboundResponses.chunk_to_responses_events(chunk, state)
+
+    lines =
+      Enum.map(events, fn ev -> "event: #{ev["type"]}\ndata: #{Jason.encode!(ev)}\n\n" end)
+
+    {:ok, lines, new_state}
   end
 
   defp reduce_openai(data, prev_usage) do
@@ -322,17 +493,28 @@ defmodule Llmgateway.Server do
                   %{conn | body_params: parsed}
 
                 {:error, _} ->
-                  conn |> Responses.send_json(400, Responses.error_body("Invalid JSON", "invalid_request")) |> halt()
+                  conn
+                  |> Responses.send_json(
+                    400,
+                    Responses.error_body("Invalid JSON", "invalid_request")
+                  )
+                  |> halt()
               end
 
             {:more, _, conn} ->
               conn
-              |> Responses.send_json(413, Responses.error_body("Request body too large", "invalid_request"))
+              |> Responses.send_json(
+                413,
+                Responses.error_body("Request body too large", "invalid_request")
+              )
               |> halt()
 
             {:error, _reason} ->
               conn
-              |> Responses.send_json(400, Responses.error_body("Failed to read body", "invalid_request"))
+              |> Responses.send_json(
+                400,
+                Responses.error_body("Failed to read body", "invalid_request")
+              )
               |> halt()
           end
         else
@@ -356,7 +538,10 @@ defmodule Llmgateway.Server do
             assign(conn, :key_name, nil)
           else
             conn
-            |> Responses.send_json(503, Responses.error_body("Router not started", "service_unavailable"))
+            |> Responses.send_json(
+              503,
+              Responses.error_body("Router not started", "service_unavailable")
+            )
             |> halt()
           end
 
@@ -367,7 +552,10 @@ defmodule Llmgateway.Server do
 
             {:error, :invalid_key} ->
               conn
-              |> Responses.send_json(401, Responses.error_body("Invalid API key", "authentication_error"))
+              |> Responses.send_json(
+                401,
+                Responses.error_body("Invalid API key", "authentication_error")
+              )
               |> halt()
           end
       end

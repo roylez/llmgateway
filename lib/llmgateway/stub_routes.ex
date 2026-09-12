@@ -116,36 +116,57 @@ defmodule Llmgateway.StubRoutes do
   end
 
   get "/assistants/:id" do
-    Responses.send_json(conn, 404, Responses.error_body("Assistant '#{id}' not found", "not_found"))
+    Responses.send_json(
+      conn,
+      404,
+      Responses.error_body("Assistant '#{id}' not found", "not_found")
+    )
   end
 
   post "/assistants/:id" do
-    Responses.send_json(conn, 404, Responses.error_body("Assistant '#{id}' not found", "not_found"))
+    Responses.send_json(
+      conn,
+      404,
+      Responses.error_body("Assistant '#{id}' not found", "not_found")
+    )
   end
 
   delete "/assistants/:id" do
-    Responses.send_json(conn, 404, Responses.error_body("Assistant '#{id}' not found", "not_found"))
+    Responses.send_json(
+      conn,
+      404,
+      Responses.error_body("Assistant '#{id}' not found", "not_found")
+    )
   end
 
   # Responses
+  # POST /responses is implemented in Llmgateway.Server (client-facing adapter).
   get "/responses" do
     Responses.empty_list(conn)
   end
 
-  post "/responses" do
-    Responses.not_implemented(conn)
-  end
-
   get "/responses/:id" do
-    Responses.send_json(conn, 404, Responses.error_body("Response '#{id}' not found", "not_found"))
+    Responses.send_json(
+      conn,
+      404,
+      Responses.error_body("Response '#{id}' not found", "not_found")
+    )
   end
 
   post "/responses/:id/cancel" do
-    Responses.send_json(conn, 404, Responses.error_body("Response '#{id}' not found", "not_found"))
+    Responses.send_json(
+      conn,
+      404,
+      Responses.error_body("Response '#{id}' not found", "not_found")
+    )
   end
 
   get "/responses/:id/input_items" do
-    Responses.send_json(conn, 404, Responses.error_body("Response '#{id}' not found", "not_found"))
+    Responses.send_json(
+      conn,
+      404,
+      Responses.error_body("Response '#{id}' not found", "not_found")
+    )
   end
 
   post "/responses/compact" do
@@ -186,11 +207,19 @@ defmodule Llmgateway.StubRoutes do
   end
 
   get "/threads/:thread_id/runs" do
-    Responses.send_json(conn, 404, Responses.error_body("Thread '#{thread_id}' not found", "not_found"))
+    Responses.send_json(
+      conn,
+      404,
+      Responses.error_body("Thread '#{thread_id}' not found", "not_found")
+    )
   end
 
   post "/threads/:thread_id/runs" do
-    Responses.send_json(conn, 404, Responses.error_body("Thread '#{thread_id}' not found", "not_found"))
+    Responses.send_json(
+      conn,
+      404,
+      Responses.error_body("Thread '#{thread_id}' not found", "not_found")
+    )
   end
 
   get "/threads/:thread_id/runs/:run_id" do
