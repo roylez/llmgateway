@@ -8,7 +8,7 @@ defmodule Llmgateway.Stream do
 
   require Logger
 
-  alias Llmgateway.{Convert, Convert.ResponsesAPI, Deployment, Upstream}
+  alias Llmgateway.{Convert, Convert.DSML, Convert.ResponsesAPI, Deployment, Upstream}
 
   @doc """
   Execute a streaming request and return an enumerable of OpenAI-format SSE chunks.
@@ -22,7 +22,12 @@ defmodule Llmgateway.Stream do
     case Upstream.execute(deployment, body, Keyword.put(opts, :stream, true)) do
       {:ok, %Req.Response{body: resp_body}, _warnings, is_responses} ->
         resp_body
-        |> Llmgateway.Stream.build_stream(deployment, is_responses, opts[:rid])
+        |> Llmgateway.Stream.build_stream(
+          deployment,
+          is_responses,
+          opts[:rid],
+          DSML.enabled?(deployment, body)
+        )
         |> preflight(deployment, opts[:rid])
         |> log_empty_stream(deployment, opts[:rid])
 
@@ -44,8 +49,12 @@ defmodule Llmgateway.Stream do
   yielding the decoded chunks, accumulates per-request diagnostics. A terminal
   `{:stream_stats, stats}` element is emitted once the upstream stream is fully
   consumed, which the server logs via `log_stats/4`.
+
+  When `dsml?` is set, DSML tool-call markup that DeepSeek models emit in the
+  text channel is converted to structured `tool_calls` chunks (see
+  `Llmgateway.Convert.DSML`).
   """
-  def build_stream(resp_body, %Deployment{} = deployment, is_responses, rid) do
+  def build_stream(resp_body, %Deployment{} = deployment, is_responses, rid, dsml? \\ false) do
     resp_body
     |> to_sse_stream(%{})
     |> Stream.transform("", &buffer_sse_lines/2)
@@ -55,6 +64,111 @@ defmodule Llmgateway.Stream do
       &finish_stats/1,
       fn _stats -> :ok end
     )
+    |> translate_dsml(dsml?)
+  end
+
+  # ── DSML text → tool_calls translation ────────────────────
+
+  defp translate_dsml(stream, false), do: stream
+
+  defp translate_dsml(stream, true) do
+    Stream.transform(stream, %{dsml: DSML.init(), upstream_tools: 0}, &dsml_chunk/2)
+  end
+
+  defp dsml_chunk(:done, acc), do: {[:done], acc}
+  defp dsml_chunk({:stream_stats, _} = stats, acc), do: {[stats], acc}
+
+  defp dsml_chunk(%{"choices" => choices} = chunk, acc) do
+    case List.first(choices) do
+      %{"delta" => delta} = choice ->
+        text =
+          if is_binary(delta["content"]) do
+            delta["content"]
+          else
+            ""
+          end
+
+        acc = count_upstream_tools(acc, delta)
+
+        {emissions, dsml} = DSML.feed(acc.dsml, text)
+
+        {flush, dsml} =
+          if choice["finish_reason"] != nil do
+            DSML.finish(dsml)
+          else
+            {[], dsml}
+          end
+
+        derived =
+          (emissions ++ flush)
+          |> Enum.map(&derived_chunk(chunk, delta, acc.upstream_tools, &1))
+
+        # The forwarded chunk's content was re-emitted (or dropped) as the
+        # derived chunks above; drop it entirely when nothing else remains.
+        chunk = strip_choice_content(chunk, choice, delta, text != "")
+
+        chunk =
+          if choice["finish_reason"] == "stop" and dsml.calls > 0 do
+            put_choice(chunk, Map.merge(choice(chunk), %{"finish_reason" => "tool_calls"}))
+          else
+            chunk
+          end
+
+        forwarded = if empty_delta?(chunk), do: [], else: [chunk]
+        {derived ++ forwarded, %{acc | dsml: dsml}}
+
+      _ ->
+        {[chunk], acc}
+    end
+  end
+
+  defp dsml_chunk(chunk, acc), do: {[chunk], acc}
+
+  defp derived_chunk(chunk, delta, _base_index, {:text, text}) do
+    delta = Map.put(delta, "content", text)
+    put_choice(chunk, Map.merge(choice(chunk), %{"delta" => delta, "finish_reason" => nil}))
+  end
+
+  defp derived_chunk(chunk, delta, base_index, {:tool_call, call}) do
+    tool_call = %{
+      "index" => base_index + call.index,
+      "id" =>
+        "call_" <> Base.hex_encode32(:crypto.strong_rand_bytes(12), case: :lower, padding: false),
+      "type" => "function",
+      "function" => %{"name" => call.name, "arguments" => call.arguments}
+    }
+
+    delta = delta |> Map.delete("content") |> Map.put("tool_calls", [tool_call])
+    put_choice(chunk, Map.merge(choice(chunk), %{"delta" => delta, "finish_reason" => nil}))
+  end
+
+  defp choice(%{"choices" => [c | _]}), do: c
+
+  defp put_choice(%{"choices" => [_ | rest]} = chunk, choice),
+    do: %{chunk | "choices" => [choice | rest]}
+
+  defp strip_choice_content(chunk, choice, delta, true),
+    do: put_choice(chunk, %{choice | "delta" => Map.delete(delta, "content")})
+
+  defp strip_choice_content(chunk, _choice, _delta, false), do: chunk
+
+  # A chunk with an empty delta and no finish reason carries nothing a client
+  # can use — typically the husk of a content delta whose text became tool
+  # calls or was buffered.
+  defp empty_delta?(%{"choices" => [%{"delta" => delta} = choice | _]}) do
+    choice["finish_reason"] == nil and delta in [[], %{}] and choice["logprobs"] == nil
+  end
+
+  defp empty_delta?(_), do: false
+
+  defp count_upstream_tools(acc, delta) do
+    case delta["tool_calls"] do
+      tcs when is_list(tcs) ->
+        %{acc | upstream_tools: acc.upstream_tools + Enum.count(tcs, &(is_map(&1) and &1["id"]))}
+
+      _ ->
+        acc
+    end
   end
 
   @doc false

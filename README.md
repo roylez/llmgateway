@@ -13,6 +13,7 @@ An Elixir proxy for LLM providers. Accepts requests in OpenAI or Anthropic forma
 - **Cache token exposure** — Anthropic cache metrics normalized into OpenAI response format
 - **GitHub Copilot** — fully automatic device code auth, no CLI tools needed
 - **Streaming** — real SSE streaming with format conversion
+- **DSML tool-call rescue** — DeepSeek models that emit `<｜DSML｜ …>` tool-call markup in the text channel get it converted to structured tool calls instead of leaking raw markup to clients
 
 ## Quick Start
 

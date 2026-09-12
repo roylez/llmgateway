@@ -5,7 +5,7 @@ defmodule Llmgateway.Provider do
   Uses pattern matching on provider type and response shape for dispatch.
   """
 
-  alias Llmgateway.{Convert, Convert.ResponsesAPI, Deployment, Telemetry, Upstream}
+  alias Llmgateway.{Convert, Convert.DSML, Convert.ResponsesAPI, Deployment, Telemetry, Upstream}
 
   # ── Public API ────────────────────────────────────────────
 
@@ -14,17 +14,19 @@ defmodule Llmgateway.Provider do
   """
   def call(%Deployment{} = deployment, body, opts \\ []) do
     tel = Telemetry.request_start(deployment, opts)
+    dsml? = DSML.enabled?(deployment, body)
 
     result =
       case Upstream.execute(deployment, body, opts) do
-        {:ok, %Req.Response{status: _status, body: body}, warnings, is_responses} ->
+        {:ok, %Req.Response{status: _status, body: resp_body}, warnings, is_responses} ->
           canonical =
             if is_responses do
-              ResponsesAPI.from_responses(body)
+              ResponsesAPI.from_responses(resp_body)
             else
-              Convert.to_canonical(deployment, body)
+              Convert.to_canonical(deployment, resp_body)
             end
 
+          canonical = if dsml?, do: DSML.rewrite_response(canonical), else: canonical
           {:ok, attach_metadata(canonical, deployment, warnings)}
 
         {:error, error} ->
