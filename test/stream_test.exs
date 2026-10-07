@@ -183,44 +183,6 @@ defmodule Llmgateway.StreamTest do
       assert stats.synthetic == true
     end
 
-    test "removes repeated closing tool-call markers across text deltas" do
-      body =
-        "data: " <>
-          Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "naut</tool_"}}]}) <>
-          "\n\ndata: " <>
-          Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "call>"}}]}) <>
-          "\n\ndata: " <>
-          Jason.encode!(%{
-            "choices" => [%{"delta" => %{"content" => "</tool_call>"}, "finish_reason" => "stop"}]
-          }) <> "\n\n"
-
-      text =
-        LlmStream.build_stream(body, deployment(), false, "rid-marker")
-        |> Enum.flat_map(fn
-          %{"choices" => [%{"delta" => %{"content" => content}} | _]} -> [content]
-          _ -> []
-        end)
-
-      assert Enum.join(text) == "naut"
-      refute Enum.any?(text, &String.contains?(&1, "</tool_call>"))
-    end
-
-    test "preserves an incomplete closing tool-call marker at stream end" do
-      body =
-        "data: " <>
-          Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "text </tool_"}}]}) <>
-          "\n\n"
-
-      text =
-        LlmStream.build_stream(body, deployment(), false, "rid-partial-marker")
-        |> Enum.flat_map(fn
-          %{"choices" => [%{"delta" => %{"content" => content}} | _]} -> [content]
-          _ -> []
-        end)
-
-      assert Enum.join(text) == "text </tool_"
-    end
-
     test "text content is counted and forwarded in order" do
       body = """
       data: {"id":"x","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]}

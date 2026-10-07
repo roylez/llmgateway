@@ -18,7 +18,8 @@ defmodule Llmgateway.Convert.DSML do
   the user, and the agent stalls waiting for tool results.
 
   This module re-emits the text with complete invokes converted to
-  OpenAI-style tool calls. Streaming callers use `init/0` + `feed/2` +
+  OpenAI-style tool calls, and drops stray `</tool_call>` markers that
+  models emit as assistant text. Streaming callers use `init/0` + `feed/2` +
   `finish/1`; `extract/1` wraps them for a complete string. Text after a
   closed block is dropped, matching vLLM's reference parsers. At long
   context the model may omit the opening block tag (vllm-project/vllm#48931),
@@ -59,7 +60,9 @@ defmodule Llmgateway.Convert.DSML do
   @block_starts for d <- @dialects, do: d.block_start
   @block_ends Enum.uniq(for d <- @dialects, do: d.block_end)
   @invoke_starts Enum.uniq(for d <- @dialects, do: d.invoke_start)
+  @tool_call_end "</tool_call>"
   @anchors Enum.uniq(@block_starts ++ @invoke_starts)
+  @hold_markers Enum.uniq(@anchors ++ [@tool_call_end])
 
   @anchor_dialect Map.new(
                     Enum.flat_map(@dialects, fn d -> [{d.block_start, d}, {d.invoke_start, d}] end)
@@ -86,7 +89,7 @@ defmodule Llmgateway.Convert.DSML do
   buffered until the next feed disambiguates it.
   """
   def feed(state, text) do
-    step(%{state | buffer: state.buffer <> text}, [])
+    step(%{state | buffer: String.replace(state.buffer <> text, @tool_call_end, "")}, [])
   end
 
   @doc """
@@ -194,7 +197,8 @@ defmodule Llmgateway.Convert.DSML do
         )
 
       nil ->
-        {out, rest} = split_at(buffer, byte_size(buffer) - hold_len(buffer, @anchors))
+        hold = hold_len(buffer, @hold_markers)
+        {out, rest} = split_at(buffer, byte_size(buffer) - hold)
         emitted = if out == "", do: emitted, else: [{:text, out} | emitted]
         {Enum.reverse(emitted), %{state | buffer: rest}}
     end

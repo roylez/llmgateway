@@ -9,7 +9,6 @@ defmodule Llmgateway.Stream do
   require Logger
 
   alias Llmgateway.{Convert, Convert.DSML, Convert.ResponsesAPI, Deployment, Upstream}
-  @tool_call_end "</tool_call>"
 
   @doc """
   Execute a streaming request and return an enumerable of OpenAI-format SSE chunks.
@@ -51,9 +50,9 @@ defmodule Llmgateway.Stream do
   `{:stream_stats, stats}` element is emitted once the upstream stream is fully
   consumed, which the server logs via `log_stats/4`.
 
-  When `dsml?` is set, DSML tool-call markup that DeepSeek models emit in the
-  text channel is converted to structured `tool_calls` chunks (see
-  `Llmgateway.Convert.DSML`).
+  When `dsml?` is set, DSML tool-call markup in the text channel is converted
+  to structured `tool_calls`. Text is always scanned for stray `</tool_call>`
+  markers (see `Llmgateway.Convert.DSML`).
   """
   def build_stream(resp_body, %Deployment{} = deployment, is_responses, rid, dsml? \\ false) do
     resp_body
@@ -65,81 +64,51 @@ defmodule Llmgateway.Stream do
       &finish_stats/1,
       fn _stats -> :ok end
     )
-    |> strip_tool_call_end()
     |> translate_dsml(dsml?)
   end
 
-  defp strip_tool_call_end(stream) do
-    Stream.transform(stream, %{pending: "", template: nil}, &strip_tool_call_end_chunk/2)
+  defp translate_dsml(stream, false) do
+    Stream.transform(stream, DSML.init(), &marker_chunk/2)
   end
-
-  defp strip_tool_call_end_chunk(
-         %{"choices" => [%{"delta" => %{"content" => content}} = choice | _]} = chunk,
-         state
-       )
-       when is_binary(content) do
-    cleaned = String.replace(state.pending <> content, @tool_call_end, "")
-
-    held_length =
-      if is_nil(choice["finish_reason"]), do: tool_call_end_suffix_length(cleaned), else: 0
-
-    visible_length = byte_size(cleaned) - held_length
-    visible = binary_part(cleaned, 0, visible_length)
-    pending = binary_part(cleaned, visible_length, held_length)
-    delta = choice["delta"]
-
-    choice =
-      if visible == "" do
-        Map.put(choice, "delta", Map.delete(delta, "content"))
-      else
-        put_in(choice, ["delta", "content"], visible)
-      end
-
-    chunk = put_choice(chunk, choice)
-    template_choice = Map.put(choice, "delta", Map.delete(choice["delta"], "content"))
-    template = if pending == "", do: nil, else: {chunk, template_choice}
-    forwarded = if empty_delta?(chunk), do: [], else: [chunk]
-    {forwarded, %{pending: pending, template: template}}
-  end
-
-  defp strip_tool_call_end_chunk(:done, state),
-    do: {flush_pending_content(state) ++ [:done], reset_filter(state)}
-
-  defp strip_tool_call_end_chunk({:stream_stats, _} = stats, state),
-    do: {flush_pending_content(state) ++ [stats], reset_filter(state)}
-
-  defp strip_tool_call_end_chunk(chunk, state) do
-    {flush_pending_content(state) ++ [chunk], reset_filter(state)}
-  end
-
-  defp reset_filter(state), do: %{state | pending: "", template: nil}
-
-  defp flush_pending_content(%{pending: ""}), do: []
-
-  defp flush_pending_content(%{pending: pending, template: {chunk, choice}}) do
-    [put_choice(chunk, put_in(choice, ["delta", "content"], pending))]
-  end
-
-  defp tool_call_end_suffix_length(text) do
-    tool_call_end_suffix_length(text, min(byte_size(@tool_call_end) - 1, byte_size(text)))
-  end
-
-  defp tool_call_end_suffix_length(_text, 0), do: 0
-
-  defp tool_call_end_suffix_length(text, length) do
-    suffix = binary_part(text, byte_size(text) - length, length)
-
-    if suffix == binary_part(@tool_call_end, 0, length) do
-      length
-    else
-      tool_call_end_suffix_length(text, length - 1)
-    end
-  end
-
-  defp translate_dsml(stream, false), do: stream
 
   defp translate_dsml(stream, true) do
     Stream.transform(stream, %{dsml: DSML.init(), upstream_tools: 0}, &dsml_chunk/2)
+  end
+
+  defp marker_chunk(
+         %{"choices" => [%{"delta" => %{"content" => text}} = choice | _]} = chunk,
+         state
+       )
+       when is_binary(text) do
+    {emissions, state} = DSML.feed(state, text)
+    {flush, state} = if choice["finish_reason"] != nil, do: DSML.finish(state), else: {[], state}
+    text = for {:text, part} <- emissions ++ flush, into: "", do: part
+
+    chunk =
+      if text == "" do
+        put_choice(chunk, %{choice | "delta" => Map.delete(choice["delta"], "content")})
+      else
+        put_choice(chunk, put_in(choice, ["delta", "content"], text))
+      end
+
+    {if(empty_delta?(chunk), do: [], else: [chunk]), state}
+  end
+
+  defp marker_chunk(:done, state), do: {flush_marker(state) ++ [:done], DSML.init()}
+
+  defp marker_chunk({:stream_stats, _} = stats, state),
+    do: {flush_marker(state) ++ [stats], DSML.init()}
+
+  defp marker_chunk(chunk, state), do: {flush_marker(state) ++ [chunk], DSML.init()}
+
+  defp flush_marker(state) do
+    case DSML.finish(state) do
+      {[{:text, text}], _state} ->
+        [%{"choices" => [%{"index" => 0, "delta" => %{"content" => text}}]}]
+
+      _ ->
+        []
+    end
   end
 
   defp dsml_chunk(:done, acc), do: {[:done], acc}
@@ -148,31 +117,15 @@ defmodule Llmgateway.Stream do
   defp dsml_chunk(%{"choices" => choices} = chunk, acc) do
     case List.first(choices) do
       %{"delta" => delta} = choice ->
-        text =
-          if is_binary(delta["content"]) do
-            delta["content"]
-          else
-            ""
-          end
-
+        text = if is_binary(delta["content"]), do: delta["content"], else: ""
         acc = count_upstream_tools(acc, delta)
-
         {emissions, dsml} = DSML.feed(acc.dsml, text)
-
-        {flush, dsml} =
-          if choice["finish_reason"] != nil do
-            DSML.finish(dsml)
-          else
-            {[], dsml}
-          end
+        {flush, dsml} = if choice["finish_reason"] != nil, do: DSML.finish(dsml), else: {[], dsml}
+        chunk = if text == "", do: chunk, else: strip_choice_content(chunk, choice, delta)
 
         derived =
           (emissions ++ flush)
           |> Enum.map(&derived_chunk(chunk, delta, acc.upstream_tools, &1))
-
-        # The forwarded chunk's content was re-emitted (or dropped) as the
-        # derived chunks above; drop it entirely when nothing else remains.
-        chunk = strip_choice_content(chunk, choice, delta, text != "")
 
         chunk =
           if choice["finish_reason"] == "stop" and dsml.calls > 0 do
@@ -188,8 +141,6 @@ defmodule Llmgateway.Stream do
         {[chunk], acc}
     end
   end
-
-  defp dsml_chunk(chunk, acc), do: {[chunk], acc}
 
   defp derived_chunk(chunk, delta, _base_index, {:text, text}) do
     delta = Map.put(delta, "content", text)
@@ -214,10 +165,8 @@ defmodule Llmgateway.Stream do
   defp put_choice(%{"choices" => [_ | rest]} = chunk, choice),
     do: %{chunk | "choices" => [choice | rest]}
 
-  defp strip_choice_content(chunk, choice, delta, true),
+  defp strip_choice_content(chunk, choice, delta),
     do: put_choice(chunk, %{choice | "delta" => Map.delete(delta, "content")})
-
-  defp strip_choice_content(chunk, _choice, _delta, false), do: chunk
 
   # A chunk with an empty delta and no finish reason carries nothing a client
   # can use — typically the husk of a content delta whose text became tool

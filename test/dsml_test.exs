@@ -58,6 +58,21 @@ defmodule Llmgateway.DSMLTest do
       assert {"a < b and x ", []} = DSML.extract("a < b and x <｜DSML｜")
     end
 
+    test "removes stray closing tool-call markers, including one split across feeds" do
+      assert {"naut", []} = DSML.extract("naut</tool_call></tool_call>")
+
+      {first, state} = DSML.feed(DSML.init(), "naut</tool_")
+      {second, state} = DSML.feed(state, "call> done")
+      {tail, _state} = DSML.finish(state)
+
+      text = for {:text, t} <- first ++ second ++ tail, into: "", do: t
+      assert text == "naut done"
+    end
+
+    test "keeps an incomplete closing tool-call marker at end of text" do
+      assert {"text </tool_", []} = DSML.extract("text </tool_")
+    end
+
     test "drops an incomplete invoke and keeps the text before it" do
       text = "prefix<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"f"
 
@@ -79,7 +94,7 @@ defmodule Llmgateway.DSMLTest do
     end
   end
 
-  describe "build_stream/5 DSML translation" do
+  describe "build_stream/4 DSML translation" do
     test "converts markup split across deltas and rewrites the finish reason" do
       body =
         """
@@ -128,7 +143,7 @@ defmodule Llmgateway.DSMLTest do
       assert match?({:stream_stats, _}, List.last(items))
     end
 
-    test "plain text stream is unchanged when translation is on" do
+    test "plain text stream is unchanged" do
       body = """
       data: {"id":"c1","choices":[{"index":0,"delta":{"content":"Hello "}}]}
 
@@ -161,24 +176,30 @@ defmodule Llmgateway.DSMLTest do
       assert List.last(finishes) == "stop"
     end
 
-    test "markup passes through untouched when translation is off" do
+    test "removes a closing tool-call marker split across text deltas" do
       body =
-        sse_text("<｜DSML｜ calls><｜DSML｜ invoke name=\"f\"></｜DSML｜ invoke></｜DSML｜ calls>") <>
+        sse_text("naut</tool_") <>
+          sse_text("call>") <>
           """
-          data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+          data: {"id":"c1","choices":[{"index":0,"delta":{"content":"</tool_call>"},"finish_reason":"stop"}]}
 
           data: [DONE]
 
           """
 
-      items =
-        LlmStream.build_stream(body, deployment("glm-5.3-flash"), false, "rid", false)
-        |> Enum.to_list()
+      text =
+        LlmStream.build_stream(
+          body,
+          deployment("deepseek/deepseek-v4.1-flash"),
+          false,
+          "rid-marker"
+        )
+        |> Enum.flat_map(fn
+          %{"choices" => [%{"delta" => %{"content" => content}} | _]} -> [content]
+          _ -> []
+        end)
 
-      content =
-        for %{"choices" => [%{"delta" => %{"content" => c}} | _]} <- items, is_binary(c), do: c
-
-      assert Enum.join(content, "") =~ "DSML"
+      assert Enum.join(text) == "naut"
     end
   end
 
