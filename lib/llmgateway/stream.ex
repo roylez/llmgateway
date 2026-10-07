@@ -9,6 +9,7 @@ defmodule Llmgateway.Stream do
   require Logger
 
   alias Llmgateway.{Convert, Convert.DSML, Convert.ResponsesAPI, Deployment, Upstream}
+  @tool_call_end "</tool_call>"
 
   @doc """
   Execute a streaming request and return an enumerable of OpenAI-format SSE chunks.
@@ -64,10 +65,76 @@ defmodule Llmgateway.Stream do
       &finish_stats/1,
       fn _stats -> :ok end
     )
+    |> strip_tool_call_end()
     |> translate_dsml(dsml?)
   end
 
-  # ── DSML text → tool_calls translation ────────────────────
+  defp strip_tool_call_end(stream) do
+    Stream.transform(stream, %{pending: "", template: nil}, &strip_tool_call_end_chunk/2)
+  end
+
+  defp strip_tool_call_end_chunk(
+         %{"choices" => [%{"delta" => %{"content" => content}} = choice | _]} = chunk,
+         state
+       )
+       when is_binary(content) do
+    cleaned = String.replace(state.pending <> content, @tool_call_end, "")
+
+    held_length =
+      if is_nil(choice["finish_reason"]), do: tool_call_end_suffix_length(cleaned), else: 0
+
+    visible_length = byte_size(cleaned) - held_length
+    visible = binary_part(cleaned, 0, visible_length)
+    pending = binary_part(cleaned, visible_length, held_length)
+    delta = choice["delta"]
+
+    choice =
+      if visible == "" do
+        Map.put(choice, "delta", Map.delete(delta, "content"))
+      else
+        put_in(choice, ["delta", "content"], visible)
+      end
+
+    chunk = put_choice(chunk, choice)
+    template_choice = Map.put(choice, "delta", Map.delete(choice["delta"], "content"))
+    template = if pending == "", do: nil, else: {chunk, template_choice}
+    forwarded = if empty_delta?(chunk), do: [], else: [chunk]
+    {forwarded, %{pending: pending, template: template}}
+  end
+
+  defp strip_tool_call_end_chunk(:done, state),
+    do: {flush_pending_content(state) ++ [:done], reset_filter(state)}
+
+  defp strip_tool_call_end_chunk({:stream_stats, _} = stats, state),
+    do: {flush_pending_content(state) ++ [stats], reset_filter(state)}
+
+  defp strip_tool_call_end_chunk(chunk, state) do
+    {flush_pending_content(state) ++ [chunk], reset_filter(state)}
+  end
+
+  defp reset_filter(state), do: %{state | pending: "", template: nil}
+
+  defp flush_pending_content(%{pending: ""}), do: []
+
+  defp flush_pending_content(%{pending: pending, template: {chunk, choice}}) do
+    [put_choice(chunk, put_in(choice, ["delta", "content"], pending))]
+  end
+
+  defp tool_call_end_suffix_length(text) do
+    tool_call_end_suffix_length(text, min(byte_size(@tool_call_end) - 1, byte_size(text)))
+  end
+
+  defp tool_call_end_suffix_length(_text, 0), do: 0
+
+  defp tool_call_end_suffix_length(text, length) do
+    suffix = binary_part(text, byte_size(text) - length, length)
+
+    if suffix == binary_part(@tool_call_end, 0, length) do
+      length
+    else
+      tool_call_end_suffix_length(text, length - 1)
+    end
+  end
 
   defp translate_dsml(stream, false), do: stream
 
