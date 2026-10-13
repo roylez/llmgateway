@@ -274,7 +274,8 @@ defmodule Llmgateway.Router.Core do
         output_limit: model_config.output_limit,
         metadata: Map.get(model_config, :metadata),
         path: model_config.path,
-        runtime: Llmgateway.ProviderRegistry.github_device(model_config.provider_name)
+        runtime: Llmgateway.ProviderRegistry.github_device(model_config.provider_name),
+        extra_body: Map.get(provider, :extra_body) || %{}
       }
 
       {:ok, deployment}

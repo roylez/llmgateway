@@ -43,6 +43,7 @@ defmodule Llmgateway.Auth do
         request_body =
           if is_responses do
             ResponsesAPI.to_responses(provider_body, allowed_efforts: allowed_efforts(deployment))
+            |> merge_extra_body(deployment)
           else
             apply_provider_tuning(provider_body, deployment, url)
           end
@@ -60,23 +61,34 @@ defmodule Llmgateway.Auth do
          %Deployment{provider_type: :openrouter} = deployment,
          "/chat/completions"
        ) do
-    provider =
-      body
-      |> Map.get("provider", %{})
-      |> Map.put("preferred_max_latency", %{"p50" => 2})
-
     body
-    |> Map.put("provider", provider)
+    |> merge_extra_body(deployment)
+    |> inject_openrouter_latency()
     |> clamp_reasoning_effort(deployment)
   end
 
   # Chat Completions deployments get the same reasoning_effort clamping as
   # /responses instead of sending an unsupported value upstream.
   defp apply_provider_tuning(body, %Deployment{} = deployment, "/chat/completions") do
-    clamp_reasoning_effort(body, deployment)
+    body |> merge_extra_body(deployment) |> clamp_reasoning_effort(deployment)
   end
 
   defp apply_provider_tuning(body, _deployment, _url), do: body
+
+  defp merge_extra_body(body, %Deployment{extra_body: extra}) when is_map(extra) and extra != %{} do
+    DeepMerge.deep_merge(body, extra)
+  end
+
+  defp merge_extra_body(body, _deployment), do: body
+
+  defp inject_openrouter_latency(body) do
+    provider =
+      body
+      |> Map.get("provider", %{})
+      |> Map.put("preferred_max_latency", %{"p50" => 2})
+
+    Map.put(body, "provider", provider)
+  end
 
   defp clamp_reasoning_effort(body, deployment) do
     case {allowed_efforts(deployment), body["reasoning_effort"]} do

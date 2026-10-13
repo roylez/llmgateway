@@ -28,7 +28,9 @@ defmodule Llmgateway.Deployment do
     :path,
     # reference to the provider runtime process (e.g. a GitHub device server),
     # resolved via the ProviderRegistry; nil when none is running
-    :runtime
+    :runtime,
+    # opaque JSON merged into every outbound request body for this provider
+    :extra_body
   ]
 
   @type t :: %__MODULE__{
@@ -41,6 +43,7 @@ defmodule Llmgateway.Deployment do
           context: non_neg_integer() | nil,
           metadata: map() | nil,
           path: String.t() | nil,
-          runtime: any() | nil
+          runtime: any() | nil,
+          extra_body: map()
         }
 end

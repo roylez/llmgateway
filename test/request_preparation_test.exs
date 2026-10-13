@@ -106,7 +106,10 @@ defmodule Llmgateway.RequestPreparationTest do
     refute Map.has_key?(chat_body, "provider")
   end
 
-  test "Provider.call applies the OpenRouter latency policy", %{base_url: base_url, body: body} do
+  test "Provider.call merges extra_body under the OpenRouter latency policy", %{
+    base_url: base_url,
+    body: body
+  } do
     body =
       Map.put(body, "provider", %{
         "order" => ["test-provider"],
@@ -114,7 +117,7 @@ defmodule Llmgateway.RequestPreparationTest do
       })
 
     assert {:ok, _response} =
-             Provider.call(deployment(base_url, "/chat/completions", :openrouter), body)
+             Provider.call(openrouter_deployment(base_url, "/chat/completions"), body)
 
     assert_receive {:captured_request, "/chat/completions", headers, chat_body}
     assert headers["user-agent"] == "LiteLLM"
@@ -124,6 +127,8 @@ defmodule Llmgateway.RequestPreparationTest do
     assert chat_body["model"] == "test-model"
 
     assert chat_body["provider"] == %{
+             "only" => ["deepinfra"],
+             "allow_fallbacks" => false,
              "order" => ["test-provider"],
              "preferred_max_latency" => %{"p50" => 2}
            }
@@ -200,12 +205,12 @@ defmodule Llmgateway.RequestPreparationTest do
     assert message == "Upstream stream completed without text or tool calls"
   end
 
-  test "Stream.call injects OpenRouter preferred_max_latency into chat completions", %{
+  test "Stream.call merges extra_body and sets stream on OpenRouter chat completions", %{
     base_url: base_url,
     body: body
   } do
     assert {:ok, _stream} =
-             Stream.call(deployment(base_url, "/chat/completions", :openrouter), body)
+             Stream.call(openrouter_deployment(base_url, "/chat/completions"), body)
 
     assert_receive {:captured_request, "/chat/completions", headers, chat_body}
     assert headers["user-agent"] == "LiteLLM"
@@ -214,8 +219,30 @@ defmodule Llmgateway.RequestPreparationTest do
     assert chat_body["messages"] == body["messages"]
     assert chat_body["model"] == "test-model"
     assert chat_body["stream"] == true
-    assert chat_body["provider"] == %{"preferred_max_latency" => %{"p50" => 2}}
+
+    assert chat_body["provider"] == %{
+             "only" => ["deepinfra"],
+             "allow_fallbacks" => false,
+             "preferred_max_latency" => %{"p50" => 2}
+           }
+
     refute Map.has_key?(chat_body, "input")
+  end
+
+  test "Provider.call merges extra_body into /responses after conversion", %{
+    base_url: base_url,
+    body: body
+  } do
+    assert {:ok, _response} =
+             Provider.call(openrouter_deployment(base_url, "/responses"), body)
+
+    assert_receive {:captured_request, "/responses", _headers, responses_body}
+    refute Map.has_key?(responses_body, "messages")
+
+    assert responses_body["provider"] == %{
+             "only" => ["deepinfra"],
+             "allow_fallbacks" => false
+           }
   end
 
   test "Auth.prepare_request clamps chat completions reasoning_effort to the model's ladder", %{
@@ -268,7 +295,15 @@ defmodule Llmgateway.RequestPreparationTest do
       base_url: base_url,
       context: 1,
       output_limit: 1,
-      path: path
+      path: path,
+      extra_body: %{}
+    }
+  end
+
+  defp openrouter_deployment(base_url, path) do
+    %{
+      deployment(base_url, path, :openrouter)
+      | extra_body: %{"provider" => %{"only" => ["deepinfra"], "allow_fallbacks" => false}}
     }
   end
 end

@@ -70,6 +70,12 @@ providers:
   - name: openrouter
     type: openrouter
     api_key: $OPENROUTER_API_KEY
+    # Merged into every outbound request for this provider. OpenRouter reads `provider`.
+    extra_body:
+      provider:
+        only: [deepseek, deepinfra, novita]
+        allow_fallbacks: false
+        data_collection: deny
 
   - name: openrouter-work
     type: openrouter

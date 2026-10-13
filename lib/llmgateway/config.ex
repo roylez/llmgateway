@@ -134,6 +134,13 @@ defmodule Llmgateway.Config do
         {:error, error} -> [error | errors]
       end
 
+    errors =
+      case validate_provider_extra_bodies(config["providers"]) do
+        :ok -> errors
+        {:error, error} -> [error | errors]
+      end
+
+
     if errors == [] do
       {:ok, config}
     else
@@ -164,6 +171,27 @@ defmodule Llmgateway.Config do
   end
 
   defp validate_auth_required_providers(_), do: :ok
+
+  defp validate_provider_extra_bodies(providers) when is_list(providers) do
+    problems =
+      Enum.flat_map(providers, fn provider ->
+        case Map.fetch(provider, "extra_body") do
+          :error -> []
+          {:ok, body} when is_map(body) -> []
+          {:ok, _} -> ["provider '#{provider["name"]}' extra_body must be a map"]
+        end
+      end)
+
+    case problems do
+      [] -> :ok
+      _ -> {:error, Enum.join(problems, "; ")}
+    end
+  end
+
+  defp validate_provider_extra_bodies(_), do: :ok
+
+  defp normalize_extra_body(body) when is_map(body), do: body
+  defp normalize_extra_body(_), do: %{}
 
   defp provider_requires_auth?(type) when is_binary(type) do
     case LLMDB.provider(String.to_atom(type)) do
@@ -482,7 +510,8 @@ defmodule Llmgateway.Config do
              runtime: provider_meta.runtime,
              base_url:
                (provider_meta.runtime && provider_meta.runtime.base_url) ||
-                 provider_meta.base_url
+                 provider_meta.base_url,
+             extra_body: normalize_extra_body(p["extra_body"])
            }}
 
         :error ->

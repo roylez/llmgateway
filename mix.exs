@@ -31,6 +31,7 @@ defmodule Llmgateway.MixProject do
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.6"},
       {:plug, "~> 1.16"},
+      {:deep_merge, "~> 1.0"},
       {:mox, "~> 1.2", only: :test}
     ]
   end

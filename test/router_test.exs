@@ -2,6 +2,7 @@ defmodule Llmgateway.RouterTest do
   use ExUnit.Case
 
   alias Llmgateway.{Auth, Config, Deployment, Router}
+  alias Llmgateway.Router.Core
 
   @fixtures_path "test/fixtures"
 
@@ -374,5 +375,65 @@ defmodule Llmgateway.RouterTest do
       assert Llmgateway.ProviderRegistry.github_device(name) == nil
       assert :erlang.system_info(:atom_count) == before
     end
+  end
+
+  describe "extra_body" do
+    test "copies a configured extra_body onto the resolved deployment" do
+      extra = %{
+        "provider" => %{
+          "only" => ["deepseek", "deepinfra", "novita"],
+          "allow_fallbacks" => false,
+          "data_collection" => "deny"
+        }
+      }
+
+      state = extra_body_state(extra)
+
+      assert {:ok, [deployment], _fallbacks} =
+               Core.resolve_deployments("gpt-4o-mini", nil, state)
+
+      assert deployment.extra_body == extra
+    end
+
+    test "resolves a missing extra_body as an empty map" do
+      state = extra_body_state(nil)
+
+      assert {:ok, [deployment], _fallbacks} =
+               Core.resolve_deployments("gpt-4o-mini", nil, state)
+
+      assert deployment.extra_body == %{}
+    end
+  end
+
+  defp extra_body_state(extra_body) do
+    provider = %{
+      name: "openai-main",
+      type: :openai,
+      api_key: "test-key",
+      base_url: "http://openai.test"
+    }
+
+    provider =
+      if is_nil(extra_body), do: provider, else: Map.put(provider, :extra_body, extra_body)
+
+    Core.build_state(%{
+      "providers" => [provider],
+      "models" => [
+        %{
+          name: "gpt-4o-mini",
+          provider_name: "openai-main",
+          provider_type: :openai,
+          upstream_model: "gpt-4o-mini",
+          keys: nil,
+          priority: 0,
+          context: 128_000,
+          output_limit: 16_384,
+          path: "/chat/completions",
+          metadata: nil
+        }
+      ],
+      "keys" => [],
+      "fallbacks" => %{}
+    })
   end
 end

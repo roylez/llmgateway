@@ -50,6 +50,8 @@ providers:
     type: github_copilot
 ```
 
+`extra_body` is an optional map merged into every outbound request for that provider; OpenRouter uses it for request fields such as `provider`.
+
 Environment variables use `$VAR` syntax and are resolved at boot.
 
 ### Models

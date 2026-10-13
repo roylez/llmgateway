@@ -469,6 +469,57 @@ defmodule Llmgateway.ConfigTest do
                )
     end
 
+    test "loads OpenRouter extra_body onto the enriched provider" do
+      assert {:ok, config} =
+               with_tmp_yaml(
+                 """
+                 providers:
+                   - name: openrouter
+                     type: openrouter
+                     api_key: test-key
+                     extra_body:
+                       provider:
+                         only: [deepseek, deepinfra, novita]
+                         allow_fallbacks: false
+                         data_collection: deny
+                 models:
+                   - provider: openrouter
+                     models:
+                       - deepseek/deepseek-chat
+                 """,
+                 &Config.load/1
+               )
+
+      [provider] = config["providers"]
+
+      assert provider.extra_body == %{
+               "provider" => %{
+                 "only" => ["deepseek", "deepinfra", "novita"],
+                 "allow_fallbacks" => false,
+                 "data_collection" => "deny"
+               }
+             }
+    end
+
+    test "rejects a non-map extra_body" do
+      assert {:error, "provider 'openrouter' extra_body must be a map"} =
+               with_tmp_yaml(
+                 """
+                 providers:
+                   - name: openrouter
+                     type: openrouter
+                     api_key: test-key
+                     extra_body: []
+                 models:
+                   - provider: openrouter
+                     models:
+                       - deepseek/deepseek-chat
+                 """,
+                 &Config.load/1
+               )
+    end
+
+
     test "fails on missing file" do
       assert {:error, _} = Config.load("nonexistent.yaml")
     end
