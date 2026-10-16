@@ -30,7 +30,8 @@ defmodule Llmgateway.Application do
         Llmgateway.Cooldown.child_spec(window_ms: cooldown_ms(config))
       ] ++
         github_device_servers(config) ++
-        [{Llmgateway.Router, config}, validation_task(config)] ++ server_children(config)
+        [{Llmgateway.Router, config}, Llmgateway.CatalogRefresh, validation_task(config)] ++
+        server_children(config)
 
     opts = [strategy: :one_for_one, name: Llmgateway.Supervisor]
     Supervisor.start_link(children, opts)

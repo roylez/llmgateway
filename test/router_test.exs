@@ -277,7 +277,7 @@ defmodule Llmgateway.RouterTest do
       models = Map.new(Router.list_models(key: "personal-key"), &{&1.id, &1})
 
       assert models["fast"].owned_by == "openrouter"
-      assert models["fast"].limits == %{context: 163_840, output: 16_000}
+      assert models["fast"].limits == %{context: 163_840, output: 16_384}
       assert models["default"].owned_by == "openai"
       assert models["default"].limits == %{context: 128_000, output: 16_384}
       assert models["slow"].owned_by == "openai"

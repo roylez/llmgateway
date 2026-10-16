@@ -32,5 +32,38 @@ defmodule Llmgateway.Auth.GitHubDeviceTest do
     test "returns nil when the response omits limits" do
       assert GitHubDevice.parse_model_metadata(%{"id" => "unknown"}) == nil
     end
+
+    test "reads tools, vision, and reasoning from supports" do
+      model = %{
+        "capabilities" => %{
+          "limits" => %{"max_context_window_tokens" => 8_000},
+          "supports" => %{
+            "tool_calls" => true,
+            "vision" => true,
+            "reasoning_effort" => ["low", "high"]
+          }
+        }
+      }
+
+      assert GitHubDevice.parse_model_metadata(model) == %{
+               context: 8_000,
+               output: nil,
+               capabilities: %{tools: %{enabled: true}},
+               modalities: %{input: [:text, :image], output: [:text]},
+               reasoning: %{enabled: true}
+             }
+    end
+
+    test "a boolean reasoning_effort does not enable reasoning" do
+      model = %{"capabilities" => %{"supports" => %{"reasoning_effort" => true}}}
+
+      assert GitHubDevice.parse_model_metadata(model) == nil
+    end
+
+    test "an empty reasoning_effort list does not enable reasoning" do
+      model = %{"capabilities" => %{"supports" => %{"reasoning_effort" => []}}}
+
+      assert GitHubDevice.parse_model_metadata(model) == nil
+    end
   end
 end

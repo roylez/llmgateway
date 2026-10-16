@@ -506,14 +506,36 @@ defmodule Llmgateway.Auth.GitHubDevice do
   @doc false
   def parse_model_metadata(model) do
     limits = get_in(model, ["capabilities", "limits"]) || %{}
+    supports = get_in(model, ["capabilities", "supports"]) || %{}
 
     context =
       first_integer(limits, ["max_context_window_tokens", "context_window", "context_length"])
 
     output = first_integer(limits, ["max_output_tokens", "max_tokens", "output_limit"])
 
-    if context || output, do: %{context: context, output: output}, else: nil
+    declared =
+      %{
+        capabilities: tools_capability(supports),
+        modalities: vision_modalities(supports),
+        reasoning: reasoning_capability(supports)
+      }
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    if context || output || declared != %{} do
+      Map.merge(%{context: context, output: output}, declared)
+    else
+      nil
+    end
   end
+
+  defp tools_capability(%{"tool_calls" => true}), do: %{tools: %{enabled: true}}
+  defp tools_capability(_supports), do: nil
+
+  defp vision_modalities(%{"vision" => true}), do: %{input: [:text, :image], output: [:text]}
+  defp vision_modalities(_supports), do: nil
+
+  defp reasoning_capability(%{"reasoning_effort" => [_ | _]}), do: %{enabled: true}
+  defp reasoning_capability(_supports), do: nil
 
   defp first_integer(model, keys) do
     Enum.find_value(keys, fn key ->

@@ -45,9 +45,10 @@ defmodule Llmgateway.Router.Core do
   @doc """
   Merge a live-limits snapshot from one Copilot auth server into the state.
 
-  `models` maps upstream model ID to `%{context: _, output: _}` (entries may
-  omit either key). Copilot deployments then resolve and list with these
-  limits instead of their configured values.
+  `models` maps upstream model ID to live metadata: `%{context: _, output: _}`
+  plus optional `capabilities`, `modalities`, and `reasoning` (entries may omit
+  any key). Copilot deployments then use these values wherever the packaged
+  catalog leaves them nil.
   """
   def put_live_limits(%__MODULE__{} = state, provider_name, models) when is_map(models) do
     limits = Map.new(models, fn {model, meta} -> {{provider_name, model}, meta} end)
@@ -96,7 +97,7 @@ defmodule Llmgateway.Router.Core do
       |> Enum.flat_map(fn {name, configs} ->
         case configs |> find_accessible(key_name) |> order_by_priority() do
           [] -> []
-          [m | _] -> [model_metadata(name, apply_live_limits(m, state))]
+          [m | _] -> [model_metadata(name, apply_live_metadata(m, state))]
         end
       end)
 
@@ -106,7 +107,7 @@ defmodule Llmgateway.Router.Core do
              |> Map.fetch!(backing_name)
              |> find_accessible(key_name)
              |> order_by_priority() do
-          [model | _] -> [model_metadata(alias_name, apply_live_limits(model, state))]
+          [model | _] -> [model_metadata(alias_name, apply_live_metadata(model, state))]
           [] -> []
         end
       end)
@@ -230,34 +231,73 @@ defmodule Llmgateway.Router.Core do
     Enum.sort_by(configs, & &1.priority, :desc)
   end
 
-  # ── Live Copilot limits ───────────────────────────────────
+  # ── Live Copilot metadata ─────────────────────────────────
 
-  # Overrides config limits when the auth server has published a snapshot;
+  # Live `/models` data fills only what the packaged catalog leaves nil. Its
+  # reasoning flag is a switch with no ladder, so it gets a fixed effort ladder.
+  @live_effort_option %{"type" => "effort", "values" => ["low", "medium", "high"]}
+
+  # Overrides config metadata when the auth server has published a snapshot;
   # absent snapshot (no auth server, no fetch yet) keeps config values.
-  defp apply_live_limits(
+  defp apply_live_metadata(
          %{provider_type: :github_copilot, provider_name: provider_name, upstream_model: model} =
            config,
          state
        ) do
     case Map.fetch(state.live_limits, {provider_name, model}) do
-      {:ok, %{context: context, output: output}} ->
-        %{
-          config
-          | context: context || config.context,
-            output_limit: output || config.output_limit
-        }
-
-      _ ->
-        config
+      {:ok, live} -> merge_live_metadata(config, live)
+      :error -> config
     end
   end
 
-  defp apply_live_limits(config, _state), do: config
+  defp apply_live_metadata(config, _state), do: config
+
+  defp merge_live_metadata(config, live) do
+    config = %{
+      config
+      | context: live[:context] || config.context,
+        output_limit: live[:output] || config.output_limit
+    }
+
+    case live_metadata(config.metadata, live) do
+      nil -> config
+      metadata -> %{config | metadata: metadata}
+    end
+  end
+
+  defp live_metadata(metadata, live) do
+    base = metadata || %{}
+
+    filled = %{
+      capabilities: base[:capabilities] || live[:capabilities],
+      modalities: base[:modalities] || live[:modalities],
+      extra: live_extra(base[:extra], live[:reasoning])
+    }
+
+    if is_nil(metadata) and Enum.all?(Map.values(filled), &is_nil/1) do
+      nil
+    else
+      Map.merge(base, filled)
+    end
+  end
+
+  defp live_extra(extra, %{enabled: true}) do
+    extra = extra || %{}
+    options = Map.get(extra, "reasoning_options", [])
+
+    if Enum.any?(options, &match?(%{"type" => "effort"}, &1)) do
+      extra
+    else
+      Map.put(extra, "reasoning_options", options ++ [@live_effort_option])
+    end
+  end
+
+  defp live_extra(extra, _reasoning), do: extra
 
   # ── Deployment building ───────────────────────────────────
 
   defp build_deployment(model_config, state, public_name) do
-    model_config = apply_live_limits(model_config, state)
+    model_config = apply_live_metadata(model_config, state)
     provider = state.providers[model_config.provider_name]
 
     if is_nil(provider) do

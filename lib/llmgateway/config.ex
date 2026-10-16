@@ -4,6 +4,8 @@ defmodule Llmgateway.Config do
   and enriches provider/model metadata from `llm_db`.
   """
 
+  require Logger
+
   # After a retryable failure, skip the {provider, model} pair for this many seconds.
   # Reasonable default (60s); explicit 0 disables.
   @default_cooldown_seconds 60
@@ -139,7 +141,6 @@ defmodule Llmgateway.Config do
         :ok -> errors
         {:error, error} -> [error | errors]
       end
-
 
     if errors == [] do
       {:ok, config}
@@ -555,6 +556,10 @@ defmodule Llmgateway.Config do
               }
 
             _ ->
+              Logger.warning(
+                "[config] Model '#{name}' (#{provider.type}:#{upstream_model}) has no llm_db metadata; capability flags stay false until live or refreshed metadata supplies them"
+              )
+
               nil
           end
 
