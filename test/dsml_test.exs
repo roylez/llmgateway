@@ -69,6 +69,28 @@ defmodule Llmgateway.DSMLTest do
       assert text == "naut done"
     end
 
+    test "keeps the closer of a singular <tool_call> block intact" do
+      # OMP emits singular in-band calls closed by `</tool_call>`. Stripping
+      # that closer made them parse as "Incomplete in-band tool call".
+      text =
+        "<tool_call>read\n<arg_key>path</arg_key>\n" <>
+          "<arg_value>skill://support-case</arg_value>\n</tool_call>"
+
+      assert {^text, []} = DSML.extract(text)
+    end
+
+    test "keeps a singular closer split across feeds and still drops a later stray" do
+      {first, state} = DSML.feed(DSML.init(), "<tool_call>read</tool_")
+      {second, state} = DSML.feed(state, "call>")
+      {third, state} = DSML.feed(state, "</tool_call>")
+      {tail, _state} = DSML.finish(state)
+
+      text = for {:text, t} <- first ++ second ++ third ++ tail, into: "", do: t
+      # The block's own closer survives; the following unmatched closer is
+      # still treated as stray and dropped.
+      assert text == "<tool_call>read</tool_call>"
+    end
+
     test "keeps an incomplete closing tool-call marker at end of text" do
       assert {"text </tool_", []} = DSML.extract("text </tool_")
     end

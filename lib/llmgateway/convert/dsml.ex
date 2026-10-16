@@ -60,9 +60,10 @@ defmodule Llmgateway.Convert.DSML do
   @block_starts for d <- @dialects, do: d.block_start
   @block_ends Enum.uniq(for d <- @dialects, do: d.block_end)
   @invoke_starts Enum.uniq(for d <- @dialects, do: d.invoke_start)
+  @tool_call_start "<tool_call>"
   @tool_call_end "</tool_call>"
   @anchors Enum.uniq(@block_starts ++ @invoke_starts)
-  @hold_markers Enum.uniq(@anchors ++ [@tool_call_end])
+  @hold_markers Enum.uniq(@anchors ++ [@tool_call_start, @tool_call_end])
 
   @anchor_dialect Map.new(
                     Enum.flat_map(@dialects, fn d -> [{d.block_start, d}, {d.invoke_start, d}] end)
@@ -80,7 +81,7 @@ defmodule Llmgateway.Convert.DSML do
   end
 
   @doc "Initial scanner state."
-  def init, do: %{mode: :text, buffer: "", calls: 0}
+  def init, do: %{mode: :text, buffer: "", calls: 0, tool_open: 0}
 
   @doc """
   Feed one text delta. Returns `{emissions, state}` where each emission is
@@ -89,7 +90,8 @@ defmodule Llmgateway.Convert.DSML do
   buffered until the next feed disambiguates it.
   """
   def feed(state, text) do
-    step(%{state | buffer: String.replace(state.buffer <> text, @tool_call_end, "")}, [])
+    {clean, tool_open} = strip_stray_closers(state.buffer <> text, state.tool_open)
+    step(%{state | buffer: clean, tool_open: tool_open}, [])
   end
 
   @doc """
@@ -327,6 +329,38 @@ defmodule Llmgateway.Convert.DSML do
   end
 
   # ── Token helpers ─────────────────────────────────────────
+
+  # Drop `</tool_call>` closers that have no matching `<tool_call>` opener in
+  # the text seen so far. Clients such as OMP parse a singular `<tool_call>`
+  # block closed by `</tool_call>`; deleting that closer turns a well-formed
+  # call into "Incomplete in-band tool call". A closer only counts as stray
+  # once every earlier opener has been paired, so a real closing tag survives.
+  defp strip_stray_closers(text, tool_open), do: strip_stray_closers(text, tool_open, "")
+
+  defp strip_stray_closers(text, tool_open, acc) do
+    case :binary.match(text, @tool_call_end) do
+      :nomatch ->
+        {acc <> text, tool_open + count_openers(text)}
+
+      {pos, len} ->
+        {head, rest} = split_at(text, pos)
+        rest = drop_first(rest, len)
+        tool_open = tool_open + count_openers(head)
+
+        if tool_open > 0 do
+          strip_stray_closers(rest, tool_open - 1, acc <> head <> @tool_call_end)
+        else
+          strip_stray_closers(rest, 0, acc <> head)
+        end
+    end
+  end
+
+  defp count_openers(text) do
+    case :binary.match(text, @tool_call_start) do
+      :nomatch -> 0
+      {pos, len} -> 1 + count_openers(drop_first(text, pos + len))
+    end
+  end
 
   defp earliest(buffer, markers) do
     markers

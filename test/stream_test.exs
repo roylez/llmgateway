@@ -205,6 +205,35 @@ defmodule Llmgateway.StreamTest do
       assert text == ["Hello", " world"]
     end
 
+    test "preserves a singular <tool_call> closer on the non-DSML path" do
+      # OMP's in-band calls rely on this closer; stripping it produced
+      # "Incomplete in-band tool call".
+      body = """
+      data: {"id":"x","choices":[{"index":0,"delta":{"role":"assistant","content":"<tool_call>read\\n<arg_key>path</arg_key>\\n<arg_value>a</arg_value>\\n</tool_call>"}}]}
+
+      data: {"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+      """
+
+      items = LlmStream.build_stream(body, deployment(), false, "rid-omp") |> Enum.to_list()
+
+      text =
+        items
+        |> chunks()
+        |> Enum.flat_map(fn c ->
+          case get_in(c, ["choices", Access.at(0), "delta", "content"]) do
+            nil -> []
+            t -> [t]
+          end
+        end)
+        |> Enum.join()
+
+      assert String.contains?(text, "</tool_call>")
+
+      assert text ==
+               "<tool_call>read\n<arg_key>path</arg_key>\n<arg_value>a</arg_value>\n</tool_call>"
+    end
+
     test "responses-format skipped events are tagged for diagnostics" do
       body = """
       data: {"type":"response.created","response":{"id":"r","model":"g","status":"in_progress"}}
