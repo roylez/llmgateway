@@ -6,16 +6,26 @@ defmodule Llmgateway.AnthropicRoutes do
 
   require Logger
 
-  alias Llmgateway.{Fallback, Responses, SSE}
+  alias Llmgateway.{Fallback, Responses, SSE, Usage}
 
   def handle_completion(conn, model_name, canonical_body, key_name, app) do
     case generate_text(model_name, canonical_body, key_name, app) do
       {:ok, response, deployment} ->
         anthropic_response = Llmgateway.Convert.InboundAnthropic.from_canonical(response)
 
+        conn =
+          conn
+          |> Responses.put_context_header(deployment)
+          |> Responses.send_json(200, anthropic_response)
+
+        Usage.record(deployment, response["usage"],
+          requested_model: model_name,
+          key: key_name,
+          app: app,
+          stream: false
+        )
+
         conn
-        |> Responses.put_context_header(deployment)
-        |> Responses.send_json(200, anthropic_response)
 
       {:error, %{type: :not_found}} ->
         send_anthropic_error(conn, 404, "not_found_error", "Model '#{model_name}' not found")
@@ -61,6 +71,13 @@ defmodule Llmgateway.AnthropicRoutes do
             "usage=#{inspect(Map.get(final_state, :usage))} ms=#{took}"
         )
 
+        Usage.record(deployment, final_state[:usage],
+          requested_model: model_name,
+          key: key_name,
+          app: app,
+          stream: true
+        )
+
         conn
 
       {:error, %{type: :not_found}} ->
@@ -70,7 +87,6 @@ defmodule Llmgateway.AnthropicRoutes do
         send_anthropic_error(conn, 500, "api_error", inspect(err))
     end
   end
-
 
   defp send_anthropic_error(conn, status, type, message) do
     Responses.send_json(conn, status, %{

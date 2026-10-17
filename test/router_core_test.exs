@@ -67,4 +67,43 @@ defmodule Llmgateway.Router.CoreTest do
     assert model.modalities == %{input: [:text], output: [:text]}
     assert model.extra == packaged.extra
   end
+
+  describe "usage_scope/2" do
+    defp scoped_state(settings) do
+      Core.build_state(%{
+        "providers" => [],
+        "models" => [],
+        "keys" => [%{"name" => "admin", "value" => "a"}, %{"name" => "work", "value" => "w"}],
+        "settings" => settings,
+        "fallbacks" => %{}
+      })
+    end
+
+    test "an open config grants full access" do
+      state =
+        Core.build_state(%{"providers" => [], "models" => [], "keys" => [], "fallbacks" => %{}})
+
+      assert Core.usage_scope("anyone", state) == :all
+      assert Core.usage_scope(nil, state) == :all
+    end
+
+    test "an admin key sees everything" do
+      state = scoped_state(%{"usage_admin_keys" => ["admin"]})
+
+      assert Core.usage_scope("admin", state) == :all
+    end
+
+    test "a non-admin valid key sees only its own rows" do
+      state = scoped_state(%{"usage_admin_keys" => ["admin"]})
+
+      assert Core.usage_scope("work", state) == {:own, "work"}
+    end
+
+    test "a missing or unknown key is denied when keys are configured" do
+      state = scoped_state(%{"usage_admin_keys" => ["admin"]})
+
+      assert Core.usage_scope(nil, state) == :denied
+      assert Core.usage_scope("ghost", state) == :denied
+    end
+  end
 end

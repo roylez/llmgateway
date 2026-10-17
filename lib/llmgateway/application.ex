@@ -23,8 +23,12 @@ defmodule Llmgateway.Application do
 
     Llmgateway.Telemetry.attach_default_logger()
 
+    data_dir = Llmgateway.DataDir.path(get_in(config, ["server", "data_dir"]))
+    File.mkdir_p!(data_dir)
+
     children =
       [
+        {Llmgateway.Repo, database: Path.join(data_dir, "llmgateway.db")},
         Llmgateway.ProviderRegistry,
         {Llmgateway.Runtime, config},
         Llmgateway.Cooldown.child_spec(window_ms: cooldown_ms(config))
@@ -34,7 +38,11 @@ defmodule Llmgateway.Application do
         server_children(config)
 
     opts = [strategy: :one_for_one, name: Llmgateway.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      Ecto.Migrator.run(Llmgateway.Repo, :up, all: true)
+      {:ok, pid}
+    end
   end
 
   # Delayed Copilot model validation as a supervised task: runs once

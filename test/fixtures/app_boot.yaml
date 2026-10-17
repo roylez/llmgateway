@@ -10,3 +10,6 @@ models:
   - provider: openai
     models:
       - gpt-4o-mini
+
+server:
+  data_dir: tmp/test-data

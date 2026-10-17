@@ -32,7 +32,7 @@ defmodule Llmgateway.Server do
 
   require Logger
 
-  alias Llmgateway.{ClientIdentity, Fallback, Responses, SSE, Serializer, Telemetry}
+  alias Llmgateway.{ClientIdentity, Fallback, Responses, SSE, Serializer, Telemetry, Usage}
 
   plug(Plug.Logger, log: :debug)
   plug(:parse_body)
@@ -111,6 +111,10 @@ defmodule Llmgateway.Server do
     models = Llmgateway.list_models(key: conn.assigns[:key_name])
     data = Enum.map(models, &Serializer.serialize_litellm_model_info/1)
     Responses.send_json(conn, 200, %{"data" => data})
+  end
+
+  get "/spend/logs" do
+    Llmgateway.UsageRoutes.spend_logs(conn)
   end
 
   get "/model_group/info" do
@@ -251,9 +255,19 @@ defmodule Llmgateway.Server do
   defp handle_completion(conn, model_name, body, key_name, app) do
     case generate_text(model_name, body, key_name, app) do
       {:ok, response, deployment} ->
+        conn =
+          conn
+          |> Responses.put_context_header(deployment)
+          |> Responses.send_json(200, response)
+
+        Usage.record(deployment, response["usage"],
+          requested_model: model_name,
+          key: key_name,
+          app: app,
+          stream: false
+        )
+
         conn
-        |> Responses.put_context_header(deployment)
-        |> Responses.send_json(200, response)
 
       {:error, err} ->
         completion_error(conn, model_name, err)
@@ -342,6 +356,13 @@ defmodule Llmgateway.Server do
 
         Telemetry.request_stop(tel, 200, last_usage)
 
+        Usage.record(deployment, last_usage,
+          requested_model: model_name,
+          key: key_name,
+          app: app,
+          stream: true
+        )
+
         case chunk(conn, "data: [DONE]\n\n") do
           {:ok, conn} -> conn
           {:error, _} -> conn
@@ -385,9 +406,22 @@ defmodule Llmgateway.Server do
   defp handle_responses_completion(conn, model_name, body, key_name, app) do
     case generate_text(model_name, body, key_name, app) do
       {:ok, response, deployment} ->
+        conn =
+          conn
+          |> Responses.put_context_header(deployment)
+          |> Responses.send_json(
+            200,
+            Llmgateway.Convert.InboundResponses.from_canonical(response)
+          )
+
+        Usage.record(deployment, response["usage"],
+          requested_model: model_name,
+          key: key_name,
+          app: app,
+          stream: false
+        )
+
         conn
-        |> Responses.put_context_header(deployment)
-        |> Responses.send_json(200, Llmgateway.Convert.InboundResponses.from_canonical(response))
 
       {:error, err} ->
         completion_error(conn, model_name, err)
@@ -417,9 +451,18 @@ defmodule Llmgateway.Server do
         state = %{resp_id: "resp_#{rid}", model: model_name}
         reducer = fn chunk, acc -> responses_stream_reduce(chunk, acc) end
 
-        {conn, _state} = SSE.stream_loop(stream, conn, state, deployment, rid, reducer, & &1)
+        {conn, final_state} =
+          SSE.stream_loop(stream, conn, state, deployment, rid, reducer, & &1[:usage])
 
-        Telemetry.request_stop(tel, 200, nil)
+        Telemetry.request_stop(tel, 200, final_state[:usage])
+
+        Usage.record(deployment, final_state[:usage],
+          requested_model: model_name,
+          key: key_name,
+          app: app,
+          stream: true
+        )
+
         conn
 
       {:error, %{type: :not_found}} ->
@@ -461,7 +504,7 @@ defmodule Llmgateway.Server do
     lines =
       Enum.map(events, fn ev -> "event: #{ev["type"]}\ndata: #{Jason.encode!(ev)}\n\n" end)
 
-    {:ok, lines, new_state}
+    {:ok, lines, Map.put(new_state, :usage, chunk["usage"] || state[:usage])}
   end
 
   defp reduce_openai(data, prev_usage) do

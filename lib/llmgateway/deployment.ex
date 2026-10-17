@@ -8,6 +8,8 @@ defmodule Llmgateway.Deployment do
   defstruct [
     # local alias, e.g. "deepseek-v4-flash"
     :name,
+    # public model name this deployment serves; equals name unless name is an alias
+    :model,
     # named provider reference, e.g. "openrouter"
     :provider_name,
     # llm_db provider atom, e.g. :openrouter
@@ -35,6 +37,7 @@ defmodule Llmgateway.Deployment do
 
   @type t :: %__MODULE__{
           name: String.t(),
+          model: String.t(),
           provider_name: String.t(),
           provider_type: atom(),
           upstream_model: String.t(),

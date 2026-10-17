@@ -60,6 +60,11 @@ defmodule Llmgateway.Router do
     GenServer.call(__MODULE__, {:resolve_key, token})
   end
 
+  @doc "Which usage rows an API key name may read (see `Core.usage_scope/2`)."
+  def usage_scope(key_name) do
+    GenServer.call(__MODULE__, {:usage_scope, key_name})
+  end
+
   @doc "List all models accessible by the given key name."
   def list_models(opts \\ []) do
     GenServer.call(__MODULE__, {:list_models, opts})
@@ -129,6 +134,11 @@ defmodule Llmgateway.Router do
   end
 
   @impl true
+  def handle_call({:usage_scope, key_name}, _from, state) do
+    {:reply, Core.usage_scope(key_name, state), state}
+  end
+
+  @impl true
   def handle_call({:list_models, opts}, _from, state) do
     {:reply, Core.list_models(opts[:key], state), state}
   end
@@ -155,5 +165,4 @@ defmodule Llmgateway.Router do
       GitHubDevice.request_live_limits(server)
     end
   end
-
 end

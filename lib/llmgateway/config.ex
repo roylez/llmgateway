@@ -131,6 +131,12 @@ defmodule Llmgateway.Config do
       end
 
     errors =
+      case validate_usage_admin_keys(config["settings"], config["keys"]) do
+        :ok -> errors
+        {:error, error} -> [error | errors]
+      end
+
+    errors =
       case validate_auth_required_providers(config["providers"]) do
         :ok -> errors
         {:error, error} -> [error | errors]
@@ -227,6 +233,34 @@ defmodule Llmgateway.Config do
   end
 
   defp validate_duplicate_keys(_), do: :ok
+
+  defp validate_usage_admin_keys(settings, keys) do
+    case settings_admin_keys(settings) do
+      nil -> :ok
+      admin_keys when is_list(admin_keys) -> check_admin_key_names(admin_keys, keys)
+      _ -> {:error, "settings.usage_admin_keys must be a list of key names"}
+    end
+  end
+
+  defp settings_admin_keys(settings) when is_map(settings), do: settings["usage_admin_keys"]
+  defp settings_admin_keys(_), do: nil
+
+  defp check_admin_key_names(admin_keys, keys) do
+    known = (keys || []) |> Enum.map(& &1["name"]) |> MapSet.new()
+
+    Enum.reduce_while(admin_keys, :ok, fn name, :ok ->
+      cond do
+        not is_binary(name) ->
+          {:halt, {:error, "settings.usage_admin_keys must be a list of key names"}}
+
+        MapSet.member?(known, name) ->
+          {:cont, :ok}
+
+        true ->
+          {:halt, {:error, "settings.usage_admin_keys references unknown key '#{name}'"}}
+      end
+    end)
+  end
 
   # Models with the same public name on the same provider would collapse into
   # indistinguishable deployments. Distinct names across different providers
@@ -483,13 +517,21 @@ defmodule Llmgateway.Config do
   defp normalize_fallbacks(map) when is_map(map), do: map
   defp normalize_fallbacks(_), do: %{}
 
-  defp normalize_settings(nil), do: %{"cooldown_seconds" => @default_cooldown_seconds}
+  defp normalize_settings(nil),
+    do: %{"cooldown_seconds" => @default_cooldown_seconds, "usage_admin_keys" => []}
 
   defp normalize_settings(settings) when is_map(settings) do
-    %{"cooldown_seconds" => normalize_cooldown(settings["cooldown_seconds"])}
+    %{
+      "cooldown_seconds" => normalize_cooldown(settings["cooldown_seconds"]),
+      "usage_admin_keys" => normalize_admin_keys(settings["usage_admin_keys"])
+    }
   end
 
-  defp normalize_settings(_), do: %{"cooldown_seconds" => @default_cooldown_seconds}
+  defp normalize_settings(_),
+    do: %{"cooldown_seconds" => @default_cooldown_seconds, "usage_admin_keys" => []}
+
+  defp normalize_admin_keys(keys) when is_list(keys), do: keys
+  defp normalize_admin_keys(_), do: []
 
   defp normalize_cooldown(n) when is_integer(n) and n > 0, do: n
   defp normalize_cooldown(n) when is_integer(n), do: 0

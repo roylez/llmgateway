@@ -118,10 +118,7 @@ defmodule Llmgateway.Auth.GitHubDevice do
   def init(opts) do
     provider_name = opts[:provider_name] || "github_copilot"
 
-    base_dir =
-      opts[:data_dir] ||
-        System.get_env("LLMGATEWAY_DATA_DIR") ||
-        Path.join([System.user_home!(), ".config", "llmgateway"])
+    base_dir = Llmgateway.DataDir.path(opts[:data_dir])
 
     token_dir = Path.join(base_dir, "github_copilot_#{provider_name}")
 

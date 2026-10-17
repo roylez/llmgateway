@@ -11,8 +11,27 @@ defmodule Llmgateway.Router.Core do
 
   alias Llmgateway.Deployment
 
-  @enforce_keys [:providers, :models, :keys, :aliases, :invalid_aliases, :fallbacks, :live_limits]
-  defstruct [:providers, :models, :keys, :aliases, :invalid_aliases, :fallbacks, :live_limits]
+  @enforce_keys [
+    :providers,
+    :models,
+    :keys,
+    :aliases,
+    :invalid_aliases,
+    :fallbacks,
+    :live_limits,
+    :admin_keys
+  ]
+
+  defstruct [
+    :providers,
+    :models,
+    :keys,
+    :aliases,
+    :invalid_aliases,
+    :fallbacks,
+    :live_limits,
+    :admin_keys
+  ]
 
   @type t :: %__MODULE__{
           providers: %{optional(String.t()) => map()},
@@ -21,7 +40,8 @@ defmodule Llmgateway.Router.Core do
           aliases: %{optional(String.t()) => %{optional(String.t()) => String.t()}},
           invalid_aliases: %{optional(String.t()) => MapSet.t(String.t())},
           fallbacks: map(),
-          live_limits: %{optional({String.t(), String.t()}) => map()}
+          live_limits: %{optional({String.t(), String.t()}) => map()},
+          admin_keys: MapSet.t(String.t())
         }
 
   @doc "Build a state snapshot from a parsed config map."
@@ -38,7 +58,8 @@ defmodule Llmgateway.Router.Core do
       aliases: aliases,
       invalid_aliases: invalid_aliases,
       fallbacks: config["fallbacks"] || [],
-      live_limits: %{}
+      live_limits: %{},
+      admin_keys: MapSet.new(get_in(config, ["settings", "usage_admin_keys"]) || [])
     }
   end
 
@@ -85,6 +106,19 @@ defmodule Llmgateway.Router.Core do
     Enum.find_value(keys, {:error, :invalid_key}, fn {name, value} ->
       if Plug.Crypto.secure_compare(value, token), do: {:ok, name}
     end)
+  end
+
+  @doc """
+  Which usage rows a key may read: `:all`, only its own `{:own, name}`, or `:denied`.
+  An open config (no keys) grants full access.
+  """
+  def usage_scope(key_name, %__MODULE__{keys: keys, admin_keys: admin_keys}) do
+    cond do
+      map_size(keys) == 0 -> :all
+      MapSet.member?(admin_keys, key_name) -> :all
+      is_binary(key_name) and Map.has_key?(keys, key_name) -> {:own, key_name}
+      true -> :denied
+    end
   end
 
   @doc "List all models accessible by the given key name."
@@ -305,6 +339,7 @@ defmodule Llmgateway.Router.Core do
     else
       deployment = %Deployment{
         name: public_name,
+        model: model_config.name,
         provider_name: model_config.provider_name,
         provider_type: model_config.provider_type,
         upstream_model: model_config.upstream_model,

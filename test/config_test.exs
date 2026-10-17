@@ -72,7 +72,6 @@ defmodule Llmgateway.ConfigTest do
       copilot = Enum.find(config["models"], &(&1.name == "copilot-test"))
       assert copilot.provider_type == :github_copilot
       assert copilot.path == nil
-
     end
 
     test "preserves key aliases" do
@@ -519,6 +518,53 @@ defmodule Llmgateway.ConfigTest do
                )
     end
 
+    test "rejects a usage_admin_keys entry that names no configured key" do
+      assert {:error, "settings.usage_admin_keys references unknown key 'ghost'"} =
+               with_tmp_yaml(
+                 """
+                 providers:
+                   - name: openai
+                     type: openai
+                     api_key: test-openai-key
+                 models:
+                   - provider: openai
+                     models:
+                       - gpt-4o-mini
+                 keys:
+                   - name: admin
+                     value: admin-value
+                 settings:
+                   usage_admin_keys:
+                     - ghost
+                 """,
+                 &Config.load/1
+               )
+    end
+
+    test "exposes usage_admin_keys under settings when configured" do
+      assert {:ok, config} =
+               with_tmp_yaml(
+                 """
+                 providers:
+                   - name: openai
+                     type: openai
+                     api_key: test-openai-key
+                 models:
+                   - provider: openai
+                     models:
+                       - gpt-4o-mini
+                 keys:
+                   - name: admin
+                     value: admin-value
+                 settings:
+                   usage_admin_keys:
+                     - admin
+                 """,
+                 &Config.load/1
+               )
+
+      assert config["settings"]["usage_admin_keys"] == ["admin"]
+    end
 
     test "fails on missing file" do
       assert {:error, _} = Config.load("nonexistent.yaml")

@@ -32,6 +32,8 @@ defmodule Llmgateway.MixProject do
       {:bandit, "~> 1.6"},
       {:plug, "~> 1.16"},
       {:deep_merge, "~> 1.0"},
+      {:ecto_sql, "~> 3.14"},
+      {:ecto_sqlite3, "~> 0.24"},
       {:mox, "~> 1.2", only: :test}
     ]
   end
