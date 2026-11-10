@@ -7,7 +7,8 @@ defmodule Llmgateway.Serializer do
   supports_reasoning, supports_vision, supports_function_calling,
   supported_openai_params, and max_input_tokens / max_output_tokens. Derive
   those from the canonical LLMDB capabilities so aliases present identically to
-  their backing models.
+  their backing models. OMP reads `/model_group/info` before `/model/info`, so
+  that endpoint carries the same limits.
   """
 
   def serialize_litellm_model_info(m) do
@@ -20,6 +21,7 @@ defmodule Llmgateway.Serializer do
     model_info =
       %{
         "id" => m.id,
+        "mode" => "chat",
         "max_input_tokens" => context,
         "max_output_tokens" => output,
         "max_tokens" => output,
@@ -31,8 +33,31 @@ defmodule Llmgateway.Serializer do
 
     %{
       "model_name" => m.id,
+      "litellm_params" => %{"model" => "#{m.owned_by}/#{m.id}"},
       "model_info" => model_info
     }
+  end
+
+  @doc """
+  Serialize one model group in the LiteLLM `/model_group/info` shape.
+
+  OMP reads `max_input_tokens` from this endpoint first, so the limits must be
+  here; without them an alias falls back to a bundled reference by model id.
+  """
+  def serialize_litellm_model_group(m) do
+    limits = m.limits || %{}
+
+    %{
+      "model_group" => m.id,
+      "providers" => [m.owned_by],
+      "mode" => "chat",
+      "max_input_tokens" => limits[:context],
+      "max_output_tokens" => limits[:output],
+      "supports_vision" => vision_supported?(m.modalities),
+      "supports_reasoning" => reasoning_enabled?(m.capabilities),
+      "supports_function_calling" => function_calling_supported?(m.capabilities)
+    }
+    |> maybe_put("supported_openai_params", supported_openai_params(m))
   end
 
   def serialize_model(m) do
@@ -45,7 +70,9 @@ defmodule Llmgateway.Serializer do
       "owned_by" => m.owned_by,
       "limits" => limits,
       "context_window" => limits[:context],
+      "context_length" => limits[:context],
       "max_tokens" => limits[:output],
+      "max_completion_tokens" => limits[:output],
       "capabilities" => m.capabilities,
       "modalities" => m.modalities,
       "execution" => m.execution,

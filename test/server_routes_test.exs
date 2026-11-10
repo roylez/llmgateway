@@ -90,14 +90,18 @@ defmodule Llmgateway.ServerRoutesTest do
   end
 
   describe "GET /v1/model_group/info" do
-    test "returns models grouped by name" do
+    test "returns one LiteLLM-shaped row per model" do
       conn = call(:get, "/v1/model_group/info")
       assert conn.status == 200
       body = json(conn)
       assert is_list(body["data"])
       [group | _] = body["data"]
       assert Map.has_key?(group, "model_group")
-      assert is_list(group["models"])
+      assert is_list(group["providers"])
+      assert group["mode"] == "chat"
+      assert is_integer(group["max_input_tokens"])
+      assert is_integer(group["max_output_tokens"])
+      refute Map.has_key?(group, "models")
     end
 
     test "works without /v1 prefix" do

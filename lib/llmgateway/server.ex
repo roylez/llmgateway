@@ -119,19 +119,8 @@ defmodule Llmgateway.Server do
 
   get "/model_group/info" do
     models = Llmgateway.list_models(key: conn.assigns[:key_name])
-
-    groups =
-      models
-      |> Enum.group_by(& &1.id)
-      |> Enum.map(fn {name, entries} ->
-        %{
-          "model_group" => name,
-          "models" =>
-            Enum.map(entries, fn m -> %{"model_id" => m.id, "provider" => m.owned_by} end)
-        }
-      end)
-
-    Responses.send_json(conn, 200, %{"data" => groups})
+    data = Enum.map(models, &Serializer.serialize_litellm_model_group/1)
+    Responses.send_json(conn, 200, %{"data" => data})
   end
 
   # ── Chat / Completions ────────────────────────────────────

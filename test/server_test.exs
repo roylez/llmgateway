@@ -67,6 +67,8 @@ defmodule Llmgateway.ServerTest do
       assert is_integer(model["limits"]["context"])
       assert model["context_window"] == model["limits"]["context"]
       assert model["max_tokens"] == model["limits"]["output"]
+      assert model["context_length"] == model["limits"]["context"]
+      assert model["max_completion_tokens"] == model["limits"]["output"]
     end
   end
 
@@ -80,6 +82,8 @@ defmodule Llmgateway.ServerTest do
       assert is_integer(body["limits"]["context"])
       assert body["context_window"] == body["limits"]["context"]
       assert body["max_tokens"] == body["limits"]["output"]
+      assert body["context_length"] == body["limits"]["context"]
+      assert body["max_completion_tokens"] == body["limits"]["output"]
     end
 
     test "returns 404 for unknown model" do
@@ -120,6 +124,20 @@ defmodule Llmgateway.ServerTest do
       assert is_integer(fast["model_info"]["max_output_tokens"])
       assert fast["model_info"]["max_input_tokens"] == body["limits"]["context"]
       assert fast["model_info"]["max_output_tokens"] == body["limits"]["output"]
+    end
+
+    test "reports alias limits in the LiteLLM model group listing" do
+      headers = [{"authorization", "Bearer test-personal-key-value"}]
+      body = json_response(call(:get, "/v1/model_group/info", nil, headers))
+
+      fast = Enum.find(body["data"], &(&1["model_group"] == "fast"))
+      backing = json_response(call(:get, "/v1/models/deepseek-v4-flash", nil, headers))
+
+      assert fast["providers"] == ["openrouter"]
+      assert fast["mode"] == "chat"
+      assert fast["max_input_tokens"] == backing["limits"]["context"]
+      assert fast["max_output_tokens"] == backing["limits"]["output"]
+      refute Map.has_key?(fast, "models")
     end
 
     test "exposes Luna metadata through its Copilot alias" do
