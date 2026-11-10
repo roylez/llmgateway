@@ -61,7 +61,7 @@ defmodule Llmgateway.AnthropicRoutes do
         state = %{rid: rid, started_at: started_at}
 
         {conn, final_state} =
-          SSE.stream_loop(stream, conn, state, deployment, rid, &reduce/2, &usage/1)
+          SSE.stream_loop(stream, conn, state, deployment, rid, &reduce/2, &usage/1, &finish/1)
 
         took = System.monotonic_time(:millisecond) - (final_state[:started_at] || started_at)
 
@@ -98,30 +98,48 @@ defmodule Llmgateway.AnthropicRoutes do
   defp reduce(chunk, state) do
     case Llmgateway.Convert.InboundAnthropic.chunk_to_anthropic_events(chunk, state) do
       {:ok, events, new_state} ->
-        usage = chunk["usage"] || Map.get(state, :usage)
-        new_state = Map.put(new_state, :usage, usage)
-
-        # Permanent per-request trace. Lifecycle events (start/stop/message)
-        # are :info so a broken stream is visible even with debug off;
-        # high-frequency content_block_delta stays at :debug.
-        Enum.each(events, fn event ->
-          if event["type"] == "content_block_delta" do
-            Logger.debug("[anthropic-stream] rid=#{new_state.rid} #{format_stream_event(event)}")
-          else
-            Logger.info("[anthropic-stream] rid=#{new_state.rid} #{format_stream_event(event)}")
-          end
-        end)
-
-        frames =
-          Enum.map(events, fn event ->
-            "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n"
-          end)
-
-        {:ok, frames, new_state}
+        new_state = put_usage(new_state, chunk, state)
+        log_events(events, new_state.rid)
+        {:ok, Enum.map(events, &event_frame/1), new_state}
 
       {:skip, new_state} ->
-        {:skip, new_state}
+        # A chunk with no events can still carry the stream's usage
+        # (the OpenAI `stream_options.include_usage` terminal chunk).
+        {:skip, put_usage(new_state, chunk, state)}
     end
+  end
+
+  defp put_usage(new_state, chunk, state) do
+    Map.put(new_state, :usage, chunk["usage"] || Map.get(state, :usage))
+  end
+
+  # End-of-stream events: message_delta (usage, stop_reason) then message_stop.
+  defp finish(state) do
+    case Llmgateway.Convert.InboundAnthropic.finish_message(state) do
+      {:ok, events, new_state} ->
+        log_events(events, new_state.rid)
+        {:ok, Enum.map(events, &event_frame/1), new_state}
+
+      :skip ->
+        {:skip, state}
+    end
+  end
+
+  defp event_frame(event) do
+    "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n"
+  end
+
+  # Permanent per-request trace. Lifecycle events (start/stop/message)
+  # are :info so a broken stream is visible even with debug off;
+  # high-frequency content_block_delta stays at :debug.
+  defp log_events(events, rid) do
+    Enum.each(events, fn event ->
+      if event["type"] == "content_block_delta" do
+        Logger.debug("[anthropic-stream] rid=#{rid} #{format_stream_event(event)}")
+      else
+        Logger.info("[anthropic-stream] rid=#{rid} #{format_stream_event(event)}")
+      end
+    end)
   end
 
   defp usage(state), do: Map.get(state, :usage)

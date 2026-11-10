@@ -167,6 +167,7 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert image["type"] == "image_url"
       assert image["image_url"]["url"] == "data:image/png;base64,abc123"
     end
+
     test "preserves assistant thinking blocks as reasoning_content" do
       body = %{
         "model" => "claude",
@@ -243,7 +244,6 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert assistant["content"] == "Hello"
     end
   end
-
 
   describe "from_canonical/1 — OpenAI response → Anthropic" do
     test "basic text response" do
@@ -322,6 +322,9 @@ defmodule Llmgateway.InboundAnthropicTest do
 
       assert result["usage"]["cache_read_input_tokens"] == 80
       assert result["usage"]["cache_creation_input_tokens"] == 20
+      # Anthropic's input_tokens excludes cached tokens, so clients that add
+      # input + cache_read recover the real prompt size (100) instead of 180.
+      assert result["usage"]["input_tokens"] == 0
     end
 
     test "finish_reason mapping" do
@@ -339,6 +342,7 @@ defmodule Llmgateway.InboundAnthropicTest do
         assert result["stop_reason"] == anthropic
       end
     end
+
     test "reasoning_content becomes thinking block" do
       openai_resp = %{
         "id" => "chatcmpl-456",
@@ -365,7 +369,6 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert text["text"] == "The answer is 42"
     end
   end
-
 
   describe "chunk_to_anthropic_events/2" do
     test "first chunk with role emits message_start (no eager text block)" do
@@ -400,23 +403,69 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert state[:next_idx] == 1
     end
 
-    test "finish chunk with text block open emits stop events" do
+    test "finish chunk closes the open block and defers the terminal events" do
       chunk = %{
         "choices" => [%{"delta" => %{}, "finish_reason" => "stop"}],
         "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 5}
       }
 
-      assert {:ok, events, _state} =
+      assert {:ok, events, state} =
                InboundAnthropic.chunk_to_anthropic_events(chunk, %{
                  started: true,
                  text_open: true,
                  next_idx: 1
                })
 
-      types = Enum.map(events, & &1["type"])
-      assert "content_block_stop" in types
-      assert "message_delta" in types
-      assert "message_stop" in types
+      assert events == [%{"type" => "content_block_stop", "index" => 0}]
+      assert state[:finished]
+      assert state[:stop_reason] == "end_turn"
+    end
+
+    test "finish_message emits the stream usage once, after late usage chunks" do
+      finish_chunk = %{
+        "choices" => [%{"delta" => %{}, "finish_reason" => "length"}]
+      }
+
+      assert {:ok, [%{"type" => "content_block_stop"}], state} =
+               InboundAnthropic.chunk_to_anthropic_events(finish_chunk, %{
+                 started: true,
+                 text_open: true,
+                 next_idx: 1
+               })
+
+      # Upstream sends usage on a later chunk than finish_reason (OpenRouter,
+      # DeepSeek, Z.AI all do) — the stream keeps that chunk's usage in state.
+      usage_chunk = %{
+        "choices" => [],
+        "usage" => %{
+          "prompt_tokens" => 4014,
+          "completion_tokens" => 1123,
+          "prompt_tokens_details" => %{"cached_tokens" => 1792, "cache_creation_tokens" => 0}
+        }
+      }
+
+      assert {:skip, state} = InboundAnthropic.chunk_to_anthropic_events(usage_chunk, state)
+      state = Map.put(state, :usage, usage_chunk["usage"])
+
+      assert {:ok, [message_delta, message_stop], state} = InboundAnthropic.finish_message(state)
+
+      assert message_delta == %{
+               "type" => "message_delta",
+               "delta" => %{"stop_reason" => "max_tokens", "stop_sequence" => nil},
+               "usage" => %{
+                 "input_tokens" => 2222,
+                 "output_tokens" => 1123,
+                 "cache_read_input_tokens" => 1792,
+                 "cache_creation_input_tokens" => 0
+               }
+             }
+
+      assert message_stop == %{"type" => "message_stop"}
+      assert InboundAnthropic.finish_message(state) == :skip
+    end
+
+    test "finish_message skips a stream that never finished" do
+      assert InboundAnthropic.finish_message(%{started: true}) == :skip
     end
 
     test "empty delta is skipped" do
@@ -601,7 +650,7 @@ defmodule Llmgateway.InboundAnthropicTest do
         }
       ]
 
-      {all_events, _final_state} =
+      {all_events, final_state} =
         Enum.reduce(chunks, {[], %{}}, fn chunk, {evts, st} ->
           case InboundAnthropic.chunk_to_anthropic_events(chunk, st) do
             {:ok, new_evts, new_st} -> {evts ++ new_evts, new_st}
@@ -638,12 +687,14 @@ defmodule Llmgateway.InboundAnthropicTest do
       assert Enum.all?(arg_deltas, &(&1["index"] == 0))
       assert Enum.map_join(arg_deltas, "", & &1["delta"]["partial_json"]) == args3
 
-      # Proper stop sequence
+      # The block is closed here; the terminal events come from finish_message/1
       assert "content_block_stop" in types
-      assert "message_delta" in types
-      assert "message_stop" in types
+      refute "message_delta" in types
 
-      stop_reason_event = Enum.find(all_events, &(&1["type"] == "message_delta"))
+      assert {:ok, [stop_reason_event, %{"type" => "message_stop"}], _state} =
+               InboundAnthropic.finish_message(final_state)
+
+      assert stop_reason_event["type"] == "message_delta"
       assert stop_reason_event["delta"]["stop_reason"] == "tool_use"
     end
 

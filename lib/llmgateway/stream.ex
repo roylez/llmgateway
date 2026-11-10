@@ -385,8 +385,14 @@ defmodule Llmgateway.Stream do
       # Some aggregator upstreams close the stream with a metadata event
       # (e.g. {"choices":[],"cost":"0"}) instead of a terminal chunk or
       # [DONE]. It carries no delta and no finish_reason — forward nothing.
-      {:ok, %{"choices" => []}} ->
-        {:ok, []}
+      # The exception is the `stream_options.include_usage` terminal chunk,
+      # whose whole payload is the usage the client is owed.
+      {:ok, %{"choices" => []} = event} ->
+        if is_map(event["usage"]) and event["usage"] != %{} do
+          {:ok, [event]}
+        else
+          {:ok, []}
+        end
 
       {:ok, event} ->
         result =

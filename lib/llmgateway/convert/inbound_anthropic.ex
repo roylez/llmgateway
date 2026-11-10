@@ -281,10 +281,13 @@ defmodule Llmgateway.Convert.InboundAnthropic do
         {events, thinking_open, text_open, next_idx, open_tool_ath_idx, tool_index_map}
       end
 
-    # Finish reason → close open block, then message_delta + message_stop
+    # Finish reason → close the open block. The closing message_delta and
+    # message_stop come from finish_message/1 at end of stream: the upstream's
+    # usage chunk arrives after this one, and Anthropic allows exactly one
+    # message_delta, which must carry that usage.
     finished = state[:finished] || false
 
-    {events, finished} =
+    {events, finished, stop_reason} =
       if finish_reason && not finished do
         stop_reason = Map.get(@finish_reason_map, finish_reason, "end_turn")
 
@@ -304,21 +307,16 @@ defmodule Llmgateway.Convert.InboundAnthropic do
               events
           end
 
-        usage_event = %{
-          "type" => "message_delta",
-          "delta" => %{"stop_reason" => stop_reason, "stop_sequence" => nil},
-          "usage" => convert_usage(chunk["usage"])
-        }
-
-        {events ++ [usage_event, %{"type" => "message_stop"}], true}
+        {events, true, stop_reason}
       else
-        {events, finished}
+        {events, finished, state[:stop_reason]}
       end
 
     new_state =
       state
       |> Map.put(:started, started)
       |> Map.put(:finished, finished || finish_reason != nil)
+      |> Map.put(:stop_reason, stop_reason)
       |> Map.put(:thinking_open, thinking_open)
       |> Map.put(:text_open, text_open)
       |> Map.put(:next_idx, next_idx)
@@ -327,6 +325,32 @@ defmodule Llmgateway.Convert.InboundAnthropic do
 
     if events == [], do: {:skip, new_state}, else: {:ok, events, new_state}
   end
+
+  @doc """
+  Final Anthropic events: one `message_delta` carrying the stream's usage, then
+  `message_stop`. Returns `:skip` when the message never finished or the events
+  were already emitted.
+  """
+  def finish_message(%{finished: true} = state) do
+    if state[:stopped] do
+      :skip
+    else
+      {:ok,
+       [
+         %{
+           "type" => "message_delta",
+           "delta" => %{
+             "stop_reason" => state[:stop_reason] || "end_turn",
+             "stop_sequence" => nil
+           },
+           "usage" => convert_usage(state[:usage])
+         },
+         %{"type" => "message_stop"}
+       ], Map.put(state, :stopped, true)}
+    end
+  end
+
+  def finish_message(_state), do: :skip
 
   # ── Message building ──────────────────────────────────────
 
@@ -537,21 +561,19 @@ defmodule Llmgateway.Convert.InboundAnthropic do
 
   defp convert_usage(nil), do: %{"input_tokens" => 0, "output_tokens" => 0}
 
+  # Anthropic's `input_tokens` excludes cached tokens; the cache counters carry
+  # them. Reporting raw prompt_tokens here makes clients add them twice.
   defp convert_usage(usage) do
-    result = %{
-      "input_tokens" => usage["prompt_tokens"] || 0,
-      "output_tokens" => usage["completion_tokens"] || 0
+    details = usage["prompt_tokens_details"] || %{}
+    cached = details["cached_tokens"] || 0
+    created = details["cache_creation_tokens"] || 0
+
+    %{
+      "input_tokens" => max((usage["prompt_tokens"] || 0) - cached - created, 0),
+      "output_tokens" => usage["completion_tokens"] || 0,
+      "cache_read_input_tokens" => cached,
+      "cache_creation_input_tokens" => created
     }
-
-    details = usage["prompt_tokens_details"]
-
-    if details do
-      result
-      |> maybe_put("cache_read_input_tokens", details["cached_tokens"])
-      |> maybe_put("cache_creation_input_tokens", details["cache_creation_tokens"])
-    else
-      result
-    end
   end
 
   # ── Helpers ───────────────────────────────────────────────

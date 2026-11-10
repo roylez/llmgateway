@@ -295,13 +295,17 @@ defmodule Llmgateway.DSMLTest do
         |> Enum.reject(&(&1 == :done or match?({:stream_stats, _}, &1)))
         |> Enum.to_list()
 
-      {events, _state} =
+      {events, state} =
         Enum.reduce(items, {[], %{}}, fn chunk, {evts, st} ->
           case InboundAnthropic.chunk_to_anthropic_events(chunk, st) do
             {:ok, new, st2} -> {evts ++ new, st2}
             {:skip, st2} -> {evts, st2}
           end
         end)
+
+      # The stop_reason lands in the end-of-stream message_delta.
+      {:ok, terminal, _state} = InboundAnthropic.finish_message(state)
+      events = events ++ terminal
 
       assert [
                %{"type" => "message_start"},

@@ -2,11 +2,18 @@ defmodule Llmgateway.StreamTest.ClosedAdapter do
   def chunk(_payload, _body), do: {:error, :closed}
 end
 
+defmodule Llmgateway.StreamTest.RecordingAdapter do
+  def chunk({:recorder, pid}, body) do
+    send(pid, {:chunk, body})
+    {:ok, body, {:recorder, pid}}
+  end
+end
+
 defmodule Llmgateway.StreamTest do
   use ExUnit.Case, async: true
 
   alias Llmgateway.Stream, as: LlmStream
-  alias Llmgateway.{Deployment, SSE, StreamTest.ClosedAdapter}
+  alias Llmgateway.{Deployment, SSE, StreamTest.ClosedAdapter, StreamTest.RecordingAdapter}
 
   describe "parse_sse_lines/1" do
     test "parses data lines from SSE chunk" do
@@ -279,6 +286,35 @@ defmodule Llmgateway.StreamTest do
       assert stats.text_deltas == 1
     end
 
+    test "forwards a usage-only chunk and drops metadata-only chunks" do
+      with_usage = """
+      data: {"choices":[{"delta":{"finish_reason":"stop","index":0}}]}
+
+      data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":8}}}
+
+      data: [DONE]
+
+      """
+
+      items =
+        LlmStream.build_stream(with_usage, deployment(), false, "rid-usage") |> Enum.to_list()
+
+      assert %{"choices" => [], "usage" => usage} =
+               Enum.find(items, &match?(%{"choices" => []}, &1))
+
+      assert usage["prompt_tokens_details"]["cached_tokens"] == 8
+
+      cost_only = """
+      data: {"choices":[],"cost":"0"}
+
+      data: [DONE]
+
+      """
+
+      items = LlmStream.build_stream(cost_only, deployment(), false, "rid-cost") |> Enum.to_list()
+      refute Enum.any?(items, &match?(%{"choices" => []}, &1))
+    end
+
     test "log_stats warns on malformed and contentless streams, not visible text" do
       import ExUnit.CaptureLog
 
@@ -470,6 +506,30 @@ defmodule Llmgateway.StreamTest do
       assert Enum.to_list(preflighted) == [
                %{"choices" => [%{"delta" => %{"content" => "ready"}}]}
              ]
+    end
+  end
+
+  describe "SSE end-of-stream flush" do
+    test "runs the flush once, after the last chunk, and returns its state" do
+      conn = %Plug.Conn{adapter: {RecordingAdapter, {:recorder, self()}}, state: :chunked}
+
+      {_conn, state} =
+        SSE.stream_loop(
+          [%{"choices" => [%{"delta" => %{"content" => "hi"}}]}, :done],
+          conn,
+          %{flushes: 0},
+          deployment(),
+          "rid-flush",
+          fn _chunk, state -> {:ok, ["data: chunk\n\n"], state} end,
+          & &1,
+          fn state ->
+            {:ok, ["data: final\n\n"], Map.update!(state, :flushes, &(&1 + 1))}
+          end
+        )
+
+      assert_receive {:chunk, "data: chunk\n\n"}
+      assert_receive {:chunk, "data: final\n\n"}
+      assert state.flushes == 1
     end
   end
 
