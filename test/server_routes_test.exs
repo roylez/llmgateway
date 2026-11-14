@@ -110,6 +110,30 @@ defmodule Llmgateway.ServerRoutesTest do
     end
   end
 
+  describe "GET /v1/user/info" do
+    test "returns the LiteLLM user envelope instead of a 404" do
+      conn = call(:get, "/v1/user/info")
+      assert conn.status == 200
+      body = json(conn)
+      assert body["user_id"] == "default_user_id"
+      assert body["spend"] == 0
+      assert body["models"] == []
+      assert Map.has_key?(body, "max_budget")
+      assert Map.has_key?(body, "user_role")
+    end
+
+    test "works with /v2 prefix" do
+      conn = call(:get, "/v2/user/info")
+      assert conn.status == 200
+    end
+
+    test "reports the authenticated key as the user id" do
+      conn = call(:get, "/v2/user/info", nil, [{"authorization", "Bearer test-work-key-value"}])
+      assert conn.status == 200
+      assert json(conn)["user_id"] == "work-key"
+    end
+  end
+
   # ── v2 prefix stripping ───────────────────────────────────
 
   describe "v2 prefix stripping" do

@@ -13,6 +13,7 @@ defmodule Llmgateway.Server do
   - `GET /v1/models/:model` — get model metadata
   - `GET /v1/model/info` — LiteLLM model info
   - `GET /v1/model_group/info` — LiteLLM model group info
+  - `GET /v1/user/info` — LiteLLM user info (identity probe)
   - `GET /version` — Hermes/vLLM discovery endpoint
   - `GET /health` — liveness probe (200 whenever the HTTP server is up)
   - `GET /ready` — readiness probe (200 only when the runtime snapshot
@@ -121,6 +122,27 @@ defmodule Llmgateway.Server do
     models = Llmgateway.list_models(key: conn.assigns[:key_name])
     data = Enum.map(models, &Serializer.serialize_litellm_model_group/1)
     Responses.send_json(conn, 200, %{"data" => data})
+  end
+
+  # LiteLLM identity probe used by proxy-aware clients. Budgets and spend
+  # tracking are not implemented, so the envelope carries zeroes rather than
+  # a misleading number.
+  get "/user/info" do
+    key_name = conn.assigns[:key_name]
+
+    Responses.send_json(conn, 200, %{
+      "user_id" => key_name || "default_user_id",
+      "user_info" => nil,
+      "keys" => [],
+      "user_email" => nil,
+      "user_alias" => nil,
+      "user_role" => nil,
+      "max_budget" => nil,
+      "spend" => 0,
+      "models" => [],
+      "budget_duration" => nil,
+      "budget_reset_at" => nil
+    })
   end
 
   # ── Chat / Completions ────────────────────────────────────
